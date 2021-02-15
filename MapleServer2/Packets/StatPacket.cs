@@ -6,18 +6,12 @@ namespace MapleServer2.Packets
 {
     public static class StatPacket
     {
-        private enum StatsMode : byte
-        {
-            SendStats = 0x23,
-            UpdateStats = 0x4
-        }
-
         public static Packet SetStats(IFieldObject<Player> player)
         {
             PacketWriter pWriter = PacketWriter.Of(SendOp.STAT);
             pWriter.WriteInt(player.ObjectId);
             pWriter.WriteByte();
-            pWriter.WriteEnum(StatsMode.SendStats);
+            pWriter.WriteByte(0x23);
             pWriter.Write(player.Value.Stats);
 
             return pWriter;
@@ -29,17 +23,21 @@ namespace MapleServer2.Packets
             pWriter.WriteInt(mob.ObjectId);
             pWriter.WriteByte();
             pWriter.WriteByte(1);
-            pWriter.WriteEnum(StatsMode.UpdateStats);
-            pWriter.WriteLong(mob.Value.Stats.Hp.Total);
-            pWriter.WriteLong(mob.Value.Stats.Hp.Min);
-            pWriter.WriteLong(mob.Value.Stats.Hp.Max);
+            pWriter.WriteByte(4); // value
+            // Stats 
+            // Damage should be update through this packet
+            for (int i = 0; i < 3; i++)
+            {
+                pWriter.WriteLong(mob.Value.Stats.Hp[i]);
+            }
 
             return pWriter;
         }
 
         public static void DefaultStatsMob(this PacketWriter pWriter, IFieldObject<Mob> mob)
         {
-            pWriter.WriteEnum(StatsMode.SendStats);
+            pWriter.WriteByte(0x23);
+            // Flag dependent
             for (int i = 0; i < 3; i++)
             {
                 pWriter.WriteLong(mob.Value.Stats.Hp[i]);
@@ -49,12 +47,12 @@ namespace MapleServer2.Packets
 
         public static void DefaultStatsNpc(this PacketWriter pWriter)
         {
-            byte flag = (byte) StatsMode.SendStats;
-            pWriter.WriteEnum(StatsMode.SendStats);
+            byte flag = 0x23;
+            pWriter.WriteByte(flag);
             if (flag == 1)
             {
                 byte value = 0;
-                pWriter.WriteByte(value);
+                pWriter.WriteByte(value); // value
                 if (value == 4)
                 {
                     pWriter.WriteLong();
@@ -81,7 +79,7 @@ namespace MapleServer2.Packets
 
         public static void WriteTotalStats(this PacketWriter pWriter, ref PlayerStats stats)
         {
-            pWriter.WriteEnum(StatsMode.SendStats);
+            pWriter.WriteByte(0x23);
             for (int i = 0; i < 3; i++)
             {
                 pWriter.WriteLong(stats.Hp[i]);
@@ -90,6 +88,15 @@ namespace MapleServer2.Packets
                 pWriter.WriteInt(stats.MountSpeed[i]);
                 pWriter.WriteInt(stats.JumpHeight[i]);
             }
+
+            /* Alternative Stat Struct
+            pWriter.WriteByte(); // Count
+            for (int i = 0; i < count; i++) {
+                pWriter.WriteByte(); // Type
+                if (type == 4) pWriter.WriteLong();
+                else pWriter.WriteInt();
+            }
+            */
         }
     }
 }

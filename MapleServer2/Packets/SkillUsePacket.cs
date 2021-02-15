@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using Maple2Storage.Types;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
@@ -9,16 +8,13 @@ namespace MapleServer2.Packets
 {
     public static class SkillUsePacket
     {
-        public static Dictionary<long, SkillCast> SkillCastMap = new Dictionary<long, SkillCast>() { };
-
-        public static Packet SkillUse(SkillCast skillCast, CoordF coords)
+        public static Packet SkillUse(IFieldObject<Player> player, int value, long count, CoordF coords)
         {
-            SkillCastMap[skillCast.SkillSN] = skillCast;
             PacketWriter pWriter = PacketWriter.Of(SendOp.SKILL_USE);
-            pWriter.WriteLong(skillCast.SkillSN);
-            pWriter.WriteInt(skillCast.UnkValue);
-            pWriter.WriteInt(skillCast.SkillId);
-            pWriter.WriteShort(skillCast.SkillLevel);
+            pWriter.WriteLong(count);
+            pWriter.WriteInt(value);    // Unknown
+            pWriter.WriteInt(player.Value.ActiveSkillId);
+            pWriter.WriteShort(player.Value.ActiveSkillLevel);
             pWriter.WriteByte();
             pWriter.Write(coords);
             pWriter.WriteLong();
@@ -28,7 +24,6 @@ namespace MapleServer2.Packets
             pWriter.WriteInt();
             pWriter.WriteByte();
             pWriter.WriteByte();
-
             return pWriter;
         }
 
@@ -48,8 +43,6 @@ namespace MapleServer2.Packets
             pWriter.WriteInt();
             pWriter.WriteShort();
             pWriter.Write(mob.Coord.X);
-            pWriter.WriteInt();
-
             return pWriter;
         }
     }
