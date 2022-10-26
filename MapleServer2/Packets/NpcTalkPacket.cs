@@ -1,46 +1,90 @@
-﻿using MaplePacketLib2.Tools;
+﻿using Maple2Storage.Enums;
+using Maple2Storage.Types.Metadata;
+using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
-using MapleServer2.Enums;
+using MapleServer2.Packets.Helpers;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class NpcTalkPacket
 {
-    public static class NpcTalkPacket
+    private enum Mode : byte
     {
-        // Unsure about how to handle the "DialogType" part of the packet.
-        // When this is wrong, the game is stuck with an invisible dialog.
-        public static Packet Respond(IFieldObject<Npc> npc, NpcType npcType, DialogType dialogType, int scriptId)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.NPC_TALK);
-            pWriter.WriteByte(0x01);
-            pWriter.WriteInt(npc.ObjectId);
-            pWriter.WriteEnum(npcType);
-            pWriter.WriteInt(scriptId);
-            pWriter.WriteInt();
-            pWriter.WriteEnum(dialogType);
+        Close = 0x00,
+        Respond = 0x01,
+        Continue = 0x02,
+        Action = 0x03,
+        CustomText = 0x04,
+    }
 
-            return pWriter;
+    public static PacketWriter Respond(IFieldObject<NpcMetadata> npc, DialogType dialogType, int contentIndex, ResponseSelection responseSelection, int scriptId)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.NpcTalk);
+        pWriter.Write(Mode.Respond);
+        pWriter.WriteInt(npc.ObjectId);
+        pWriter.Write(dialogType);
+        pWriter.WriteInt(scriptId);
+        pWriter.WriteInt(contentIndex);
+        pWriter.Write(responseSelection);
+
+        return pWriter;
+    }
+
+    public static PacketWriter ContinueChat(int scriptId, DialogType dialogType, ResponseSelection responseSelection, int contentIndex, int questId = 0)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.NpcTalk);
+        pWriter.Write(Mode.Continue);
+        pWriter.Write(dialogType);
+        pWriter.WriteInt(questId);
+        pWriter.WriteInt(scriptId);
+        pWriter.WriteInt(contentIndex); // used when there is multiple contents for the same script id
+        pWriter.Write(responseSelection);
+
+        return pWriter;
+    }
+
+    public static PacketWriter Action(ActionType actionType, string window = "", string parameters = "", int portalId = 0, Item item = null)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.NpcTalk);
+        pWriter.Write(Mode.Action);
+        pWriter.Write(actionType);
+        switch (actionType)
+        {
+            case ActionType.Portal:
+                pWriter.WriteInt(portalId);
+                break;
+            case ActionType.OpenWindow:
+                pWriter.WriteUnicodeString(window);
+                pWriter.WriteUnicodeString(parameters);
+                break;
+            case ActionType.ItemReward:
+                pWriter.WriteInt(1); // item count. TODO: support multiple items
+                pWriter.WriteInt(item.Id);
+                pWriter.WriteByte((byte) item.Rarity);
+                pWriter.WriteInt(item.Amount);
+                pWriter.WriteItem(item);
+                break;
         }
 
-        public static Packet ContinueChat(int scriptId, ResponseType responseType, DialogType dialogType, int unk, int questId = 0)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.NPC_TALK);
-            pWriter.WriteByte(0x02);
-            pWriter.WriteEnum(responseType);
-            pWriter.WriteInt(questId);
-            pWriter.WriteInt(scriptId);
-            pWriter.WriteInt(unk); // 1 when completed a quest and start an cutscene
-            pWriter.WriteEnum(dialogType);
+        return pWriter;
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter CustomText(string script, string voiceId, string illustration)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.NpcTalk);
+        pWriter.Write(Mode.CustomText);
+        pWriter.WriteUnicodeString(script);
+        pWriter.WriteUnicodeString(voiceId);
+        pWriter.WriteUnicodeString(illustration);
+        return pWriter;
+    }
 
-        public static Packet Close()
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.NPC_TALK);
-            pWriter.WriteByte(0x00);
+    public static PacketWriter Close()
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.NpcTalk);
+        pWriter.Write(Mode.Close);
 
-            return pWriter;
-        }
+        return pWriter;
     }
 }

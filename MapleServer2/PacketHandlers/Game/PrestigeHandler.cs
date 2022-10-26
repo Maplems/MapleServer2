@@ -1,61 +1,88 @@
-﻿using System;
-using Maple2Storage.Types.Metadata;
+﻿using Maple2Storage.Types.Metadata;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
 using MapleServer2.Data.Static;
+using MapleServer2.Enums;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
-using MapleServer2.Tools;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class PrestigeHandler : GamePacketHandler<PrestigeHandler>
 {
-    public class PrestigeHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.Prestige;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.PRESTIGE;
+        ClaimPerk = 0x03,
+        ClaimMissionReward = 0x05
+    }
 
-        public PrestigeHandler(ILogger<PrestigeHandler> logger) : base(logger) { }
-
-        private enum PrestigeMode : byte
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode mode = (Mode) packet.ReadByte();
+        switch (mode)
         {
-            Reward = 0x03
+            case Mode.ClaimPerk:
+                HandleClaimPerk(session, packet);
+                break;
+            case Mode.ClaimMissionReward:
+                HandleClaimMissionReward(session, packet);
+                break;
+            default:
+                LogUnknownMode(mode);
+                break;
+        }
+    }
+
+    private static void HandleClaimPerk(GameSession session, PacketReader packet)
+    {
+        int rank = packet.ReadInt();
+
+        if (session.Player.PrestigeRewardsClaimed.Contains(rank))
+        {
+            return;
         }
 
-        public override void Handle(GameSession session, PacketReader packet)
+        // Get reward data
+        PrestigeReward reward = PrestigeMetadataStorage.GetReward(rank);
+
+        switch (reward.Type)
         {
-            PrestigeMode mode = (PrestigeMode) packet.ReadByte();
-            switch (mode)
-            {
-                case PrestigeMode.Reward: // Receive reward
-                    HandleReward(session, packet);
-                    break;
-            }
+            case "item":
+                Item item = new(reward.Id, rarity: 4);
+
+                session.Player.Inventory.AddItem(session, item, true);
+                break;
+            case "statPoint":
+                session.Player.AddStatPoint(reward.Value, OtherStatsIndex.Trophy);
+                break;
         }
 
-        private static void HandleReward(GameSession session, PacketReader packet)
+        session.Send(PrestigePacket.Reward(rank));
+        session.Player.PrestigeRewardsClaimed.Add(rank);
+    }
+
+    private static void HandleClaimMissionReward(GameSession session, PacketReader packet)
+    {
+        int missionId = packet.ReadInt();
+        PrestigeLevelMissionMetadata metadata = PrestigeLevelMissionMetadataStorage.GetMetadata(missionId);
+        if (metadata is null)
         {
-            int rank = packet.ReadInt();
-
-            session.Send(PrestigePacket.Reward(rank));
-
-            // Get reward data
-            PrestigeReward reward = PrestigeMetadataStorage.GetReward(rank);
-
-            if (reward.Type.Equals("item"))
-            {
-                Item item = new Item(reward.Id)
-                {
-                    CreationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    Rarity = 4
-                };
-
-                InventoryController.Add(session, item, true);
-            }
-            else if (reward.Type.Equals("statPoint"))
-            {
-                session.Player.StatPointDistribution.AddTotalStatPoints(reward.Value);
-            }
+            return;
         }
+
+        PrestigeMission mission = session.Player.PrestigeMissions.FirstOrDefault(x => x.Id == missionId);
+        if (mission is null || mission.Claimed || mission.LevelCount < metadata.MissionCount)
+        {
+            return;
+        }
+
+        mission.Claimed = true;
+        Item reward = new(metadata.RewardItemId, metadata.RewardItemAmount, metadata.RewardItemRarity);
+
+        session.Player.Inventory.AddItem(session, reward, true);
+        session.Send(PrestigePacket.UpdateMissions(session.Player.PrestigeMissions));
     }
 }

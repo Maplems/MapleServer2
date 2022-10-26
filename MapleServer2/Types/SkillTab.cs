@@ -1,64 +1,122 @@
-﻿using System.Collections.Generic;
-using System.Linq;
+﻿using Maple2Storage.Enums;
 using Maple2Storage.Types.Metadata;
-using MapleServer2.Constants.Skills;
 using MapleServer2.Data.Static;
+using MapleServer2.Database;
 using MapleServer2.Enums;
 
-namespace MapleServer2.Types
+namespace MapleServer2.Types;
+
+public class SkillTab
 {
-    public class SkillTab
+    public long Uid { get; private set; }
+    public long TabId { get; set; }
+    public string Name { get; set; }
+
+    public Dictionary<int, SkillMetadata> SkillJob { get; private set; }
+    public Dictionary<int, short> SkillLevels { get; private set; }
+
+    public SkillTab() { }
+
+    public SkillTab(long characterId, JobCode jobCode, SubJobCode subJobCode, long id, string name)
     {
-        public long Id { get; set; }
-        public string Name { get; private set; }
-        public List<int> Order { get; private set; }
-        public List<SkillMetadata> Skills { get; private set; }
-        public Dictionary<int, SkillMetadata> SkillJob { get; set; }
+        Name = name;
+        ResetSkillTree(jobCode, subJobCode);
+        TabId = id;
+        Uid = DatabaseManager.SkillTabs.Insert(this, characterId);
+    }
 
-        public SkillTab(Job job)
+    public SkillTab(string name, int jobId, long tabId, long uid, Dictionary<int, short> skillLevels)
+    {
+        Name = name;
+        TabId = tabId;
+        Uid = uid;
+        SkillJob = GetSkillsMetadata((JobCode) jobId);
+        SkillLevels = skillLevels;
+    }
+
+    public void AddOrUpdate(int id, short level, bool isLearned)
+    {
+        SkillLevels[id] = isLearned ? level : (short) 0;
+        if (!SkillJob.ContainsKey(id))
         {
-            Id = 0x000032DF995949B9; // temporary hard coded id
-            Name = "Build";
-            Skills = SkillMetadataStorage.GetJobSkills(job);
-            Order = SkillTreeOrdered.GetListOrdered(job);
-            SkillJob = AddOnDictionary();
+            return;
         }
 
-        public Dictionary<int, SkillMetadata> AddOnDictionary()
+        foreach (int sub in SkillJob[id].SubSkills)
         {
-            Dictionary<int, SkillMetadata> skillJob = new Dictionary<int, SkillMetadata>();
+            SkillLevels[sub] = isLearned ? level : (short) 0;
+        }
+    }
 
-            foreach (SkillMetadata skill in Skills)
+    public void ResetSkillTree(JobCode jobCode, SubJobCode subJobCode)
+    {
+        SkillJob = GetSkillsMetadata(jobCode);
+        if (jobCode is JobCode.GameMaster)
+        {
+            SkillLevels = SkillJob.Keys.ToDictionary(skillId => skillId, _ => (short) 1);
+            return;
+        }
+
+        SkillLevels = SkillJob.Keys.ToDictionary(skillId => skillId, _ => (short) 0);
+        LearnDefaultSkills(jobCode, subJobCode);
+    }
+
+    /// <summary>
+    /// Returns all skills by type.
+    /// </summary>
+    /// <param name="type"><see cref="SkillType"/></param>
+    /// <returns>List of skill id and skill level</returns>
+    public List<(int skillId, short skillLevel)> GetSkillsByType(SkillType type)
+    {
+        List<(int, short)> skills = new();
+        foreach ((int skillId, SkillMetadata metadata) in SkillJob.Where(x => x.Value.Type == type || x.Value.SubSkills.Length > 0))
+        {
+            short level = SkillLevels.GetValueOrDefault(skillId);
+
+            if (metadata.Type == type)
             {
-                skillJob[skill.SkillId] = skill;
+                skills.Add((skillId, level));
             }
-            return skillJob;
-        }
 
-        public void AddOrUpdate(int id, short level, byte learned)
-        {
-            SkillJob[id].Learned = learned;
-            SkillJob[id].SkillLevels.Find(x => x.Level != 0).Level = level;
-            if (SkillJob[id].SubSkills.Length != 0)
+            foreach (int subSkillId in metadata.SubSkills)
             {
-                foreach (int sub in SkillJob[id].SubSkills.Select(x => x))
+                SkillMetadata subSkill = SkillMetadataStorage.GetSkill(subSkillId);
+
+                if (subSkill != null && subSkill.Type == type)
                 {
-                    if (SkillJob.ContainsKey(sub))
-                    {
-                        SkillJob[sub].Learned = learned;
-                        SkillJob[sub].SkillLevels.Find(x => x.Level != 0).Level = level;
-                    }
+                    skills.Add((subSkillId, level));
                 }
             }
         }
 
-        public void Rename(string name)
+        return skills;
+    }
+
+    private static Dictionary<int, SkillMetadata> GetSkillsMetadata(JobCode jobCode)
+    {
+        return SkillMetadataStorage.GetJobSkills(jobCode).ToDictionary(x => x.SkillId, x => x);
+    }
+
+    public void LearnDefaultSkills(JobCode jobCode, SubJobCode subJobCode)
+    {
+        JobMetadata jobMetadata = JobMetadataStorage.GetJobMetadata(jobCode);
+        if (jobMetadata is null)
         {
-            Name = name;
+            return;
         }
 
-        public static List<SkillMetadata> GetJobFeatureSkills(Job job) => SkillMetadataStorage.GetJobSkills(job);
+        List<int> skillIds = new();
+        jobMetadata.LearnedSkills.ForEach(x => skillIds.AddRange(x.SkillIds));
 
-        public override string ToString() => $"SkillTab(Id:{Id},Name:{Name},Skills:{string.Join(",", SkillJob)})";
+        foreach (int skillId in skillIds)
+        {
+            JobSkillMetadata jobSkillMetadata = jobMetadata.Skills.First(x => x.SkillId == skillId);
+            if (jobSkillMetadata.SubJobCode != (int) subJobCode && jobSkillMetadata.SubJobCode != 0)
+            {
+                continue;
+            }
+
+            AddOrUpdate(skillId, 1, true);
+        }
     }
 }

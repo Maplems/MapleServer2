@@ -1,339 +1,502 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using Maple2Storage.Enums;
 using Maple2Storage.Types;
 using Maple2Storage.Types.Metadata;
 using MapleServer2.Data.Static;
+using MapleServer2.Database;
 using MapleServer2.Enums;
+using MapleServer2.Packets;
+using MapleServer2.Servers.Game;
 using MapleServer2.Tools;
+using MoonSharp.Interpreter;
 
-namespace MapleServer2.Types
+namespace MapleServer2.Types;
+
+public class Item
 {
-    public class Item
+    public int Level { get; set; }
+    public InventoryTab InventoryTab { get; private set; }
+    public ItemSlot ItemSlot { get; set; }
+    public GemSlot GemSlot { get; set; }
+    public int Rarity { get; init; }
+    public int StackLimit { get; private set; }
+    public bool EnableBreak { get; private set; }
+    public bool IsCustomScore { get; set; }
+    public int PlayCount { get; set; }
+    public Gender Gender { get; private set; }
+    public string FileName { get; set; }
+    public int SkillId { get; set; }
+    public List<JobCode> RecommendJobs { get; set; }
+    public ItemFunctionMetadata Function { get; set; }
+    public string Tag { get; set; }
+    public int ShopID { get; set; }
+    public ItemHousingCategory HousingCategory;
+    public string BlackMarketCategory;
+    public string Category;
+    public ItemType Type { get; set; }
+
+    public int Id;
+    public long Uid;
+    public string Name;
+    public short Slot;
+    public int Amount;
+    public bool IsEquipped;
+
+    public long CreationTime;
+    public long ExpiryTime;
+
+    public int TimesAttributesChanged;
+    public bool IsLocked;
+    public long UnlockTime;
+    public short RemainingGlamorForges;
+    public int GachaDismantleId;
+    public int GearScore;
+    public int EnchantLevel;
+    public int LimitBreakLevel;
+    public bool DisableEnchant;
+
+    // EnchantExp (10000 = 100%) for Peachy
+    public int EnchantExp;
+    public int RemainingRepackageCount;
+    public int Charges;
+    public ItemTransferFlag TransferFlag;
+    public TransferType TransferType;
+    public int RemainingTrades;
+
+    // For friendship badges
+    public long PairedCharacterId;
+    public string PairedCharacterName;
+    public int PetSkinBadgeId;
+    public byte[] TransparencyBadgeBools;
+
+    public long OwnerAccountId;
+    public long OwnerCharacterId;
+    public string OwnerCharacterName;
+    public EquipColor Color;
+    public HairData HairData;
+    public HatData HatData;
+    public byte[] FaceDecorationData;
+    public MusicScore Score;
+    public ItemStats Stats;
+    public GemSockets GemSockets;
+
+    public UGC? Ugc;
+
+    public long InventoryId;
+    public long BankInventoryId;
+    public long HomeId;
+    public long MailId;
+
+    // For items that are in the field
+    public DropInformation DropInformation = new();
+
+    public ItemAdditionalEffectMetadata? AdditionalEffects;
+
+    public PetInfo? PetInfo;
+
+    public Item() { }
+
+    public Item(int id, int amount = 1, int rarity = -1, bool saveToDatabase = true)
     {
-        public InventoryTab InventoryTab { get; private set; }
-        public ItemSlot ItemSlot { get; private set; }
-        public GemSlot GemSlot { get; private set; }
-        public int Rarity { get; set; }
-        public int StackLimit { get; private set; }
-        public bool IsTwoHand { get; private set; }
-        public bool IsDress { get; private set; }
-        public bool IsTemplate { get; set; }
-        public int PlayCount { get; set; }
-        public List<Job> RecommendJobs { get; set; }
-        public List<ItemContent> Content { get; private set; }
+        Id = id;
+        Amount = amount;
+        Rarity = rarity == -1 ? ItemMetadataStorage.GetRarity(id) : rarity;
 
-        public readonly int Id;
-        public long Uid;
-        public short Slot;
-        public int Amount;
+        ItemPropertyMetadata property = ItemMetadataStorage.GetPropertyMetadata(Id);
+        ItemMusicMetadata music = ItemMetadataStorage.GetMusicMetadata(Id);
+        ItemLimitMetadata limit = ItemMetadataStorage.GetLimitMetadata(Id);
 
-        public long CreationTime;
-        public long ExpiryTime;
-
-        public int TimesAttributesChanged;
-        public bool IsLocked;
-        public long UnlockTime;
-        public short RemainingGlamorForges;
-        public int Enchants;
-        // EnchantExp (10000 = 100%) for Peachy
-        public int EnchantExp;
-        public bool CanRepackage;
-        public int Charges;
-        public TransferFlag TransferFlag;
-        public int RemainingTrades;
-
-        // For friendship badges
-        public long PairedCharacterId;
-        public string PairedCharacterName;
-
-        public Player Owner;
-
-        public EquipColor Color;
-
-        public HairData HairD;
-
-        public byte[] FaceDecorationD;
-        public byte AppearanceFlag;
-
-        public ItemStats Stats;
-
-        public Item(int id)
+        SetMetadataValues();
+        Name = ItemMetadataStorage.GetName(id);
+        Level = limit.LevelLimitMin;
+        List<ItemSlot> slots = ItemMetadataStorage.GetItemSlots(id);
+        if (slots.Count == 1)
         {
-            Id = id;
-            Uid = GuidGenerator.Long();
-            InventoryTab = ItemMetadataStorage.GetTab(id);
-            ItemSlot = ItemMetadataStorage.GetSlot(id);
-            GemSlot = ItemMetadataStorage.GetGem(id);
-            Rarity = ItemMetadataStorage.GetRarity(id);
-            StackLimit = ItemMetadataStorage.GetStackLimit(id);
-            IsTwoHand = ItemMetadataStorage.GetIsTwoHand(id);
-            IsDress = ItemMetadataStorage.GetIsDress(id);
-            IsTemplate = ItemMetadataStorage.GetIsTemplate(id);
-            PlayCount = ItemMetadataStorage.GetPlayCount(id);
-            RecommendJobs = ItemMetadataStorage.GetRecommendJobs(id);
-            Content = ItemMetadataStorage.GetContent(id);
-            Slot = -1;
-            Amount = 1;
-            Stats = new ItemStats(id, Rarity);
-            CanRepackage = true; // If false, item becomes untradable
+            ItemSlot = slots.First();
         }
 
-        // Make a copy of item
-        public Item(Item other)
+        if (ItemMetadataStorage.GetIsUGC(id))
         {
-            Id = other.Id;
-            InventoryTab = other.InventoryTab;
-            ItemSlot = other.ItemSlot;
-            GemSlot = other.GemSlot;
-            Rarity = other.Rarity;
-            StackLimit = other.StackLimit;
-            IsTwoHand = other.IsTwoHand;
-            IsDress = other.IsDress;
-            IsTemplate = other.IsTemplate;
-            PlayCount = other.PlayCount;
-            Content = other.Content;
-            Uid = other.Uid;
-            Slot = other.Slot;
-            Amount = other.Amount;
-            CreationTime = other.CreationTime;
-            ExpiryTime = other.ExpiryTime;
-            TimesAttributesChanged = other.TimesAttributesChanged;
-            IsLocked = other.IsLocked;
-            UnlockTime = other.UnlockTime;
-            RemainingGlamorForges = other.RemainingGlamorForges;
-            Enchants = other.Enchants;
-            EnchantExp = other.EnchantExp;
-            CanRepackage = other.CanRepackage;
-            Charges = other.Charges;
-            TransferFlag = other.TransferFlag;
-            RemainingTrades = other.RemainingTrades;
-            PairedCharacterId = other.PairedCharacterId;
-            PairedCharacterName = other.PairedCharacterName;
-            Owner = other.Owner;
-            Color = other.Color;
-            HairD = other.HairD;
-            AppearanceFlag = other.AppearanceFlag;
-            Stats = new ItemStats(other.Stats);
+            Ugc = new();
+            Ugc.Uid = DatabaseManager.UGC.Insert(Ugc);
         }
 
-        public static Item Ear()
+        if (GemSlot == GemSlot.TRANS)
         {
-            return new Item(10500001)
-            {
-                Uid = 2754959794416496488,
-                CreationTime = 1558494660,
-                Color = new EquipColor(),
-            };
+            TransparencyBadgeBools = new byte[10];
         }
 
-        public static Item Hair()
+        PlayCount = music.PlayCount;
+        Color = ItemMetadataStorage.GetEquipColor(id);
+        CreationTime = TimeInfo.Now();
+        RemainingTrades = property.TradeableCount;
+        RemainingRepackageCount = property.RepackageCount;
+        RemainingGlamorForges = ItemExtractionMetadataStorage.GetExtractionCount(id);
+        Slot = -1;
+        Score = new();
+        Stats = new(this);
+        GearScore = GetGearScore();
+        ExpiryTime = ItemMetadataStorage.GetExpiration(id);
+        if (InventoryTab is InventoryTab.Pets)
         {
-            return new Item(10200148)
-            {
-                Uid = 2867972925711604442,
-                CreationTime = 1565575851,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x7E, 0xCC, 0xF7),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x85, 0xDB),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x48, 0x5E, 0xA8),
-                    15
-                ),
-                HairD = new HairData(0.3f, 0.3f, new byte[24], new byte[24]),
-                AppearanceFlag = 2,
-            };
+            PetInfo = new();
         }
 
-        public static Item Face()
+        GemSockets = new(this);
+
+        if (!saveToDatabase)
         {
-            return new Item(10300004)
-            {
-                Uid = 2754959794416496483,
-                CreationTime = 1558494660,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xB5, 0x24, 0x29),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xF7, 0xE3, 0xE3),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x14, 0x07, 0x02),
-                    0
-                ),
-                AppearanceFlag = 3,
-            };
+            return;
         }
 
-        public static Item FaceDecoration()
+        Uid = DatabaseManager.Items.Insert(this);
+    }
+
+    // Make a copy of item
+    public Item(Item other)
+    {
+        Id = other.Id;
+        Name = other.Name;
+        Level = other.Level;
+        Gender = other.Gender;
+        InventoryTab = other.InventoryTab;
+        ItemSlot = other.ItemSlot;
+        GemSlot = other.GemSlot;
+        Rarity = other.Rarity;
+        StackLimit = other.StackLimit;
+        EnableBreak = other.EnableBreak;
+        IsCustomScore = other.IsCustomScore;
+        PlayCount = other.PlayCount;
+        FileName = other.FileName;
+        Function = other.Function;
+        Uid = other.Uid;
+        Slot = other.Slot;
+        Amount = other.Amount;
+        CreationTime = other.CreationTime;
+        ExpiryTime = other.ExpiryTime;
+        TimesAttributesChanged = other.TimesAttributesChanged;
+        IsLocked = other.IsLocked;
+        UnlockTime = other.UnlockTime;
+        RemainingGlamorForges = other.RemainingGlamorForges;
+        GachaDismantleId = other.GachaDismantleId;
+        EnchantLevel = other.EnchantLevel;
+        LimitBreakLevel = other.LimitBreakLevel;
+        EnchantExp = other.EnchantExp;
+        RemainingRepackageCount = other.RemainingRepackageCount;
+        Charges = other.Charges;
+        TransferFlag = other.TransferFlag;
+        RemainingTrades = other.RemainingTrades;
+        PairedCharacterId = other.PairedCharacterId;
+        PairedCharacterName = other.PairedCharacterName;
+        PetSkinBadgeId = other.PetSkinBadgeId;
+        RecommendJobs = other.RecommendJobs;
+        OwnerCharacterId = other.OwnerCharacterId;
+        OwnerCharacterName = other.OwnerCharacterName;
+        InventoryId = other.InventoryId;
+        BankInventoryId = other.BankInventoryId;
+        BlackMarketCategory = other.BlackMarketCategory;
+        Category = other.Category;
+        HomeId = other.HomeId;
+        Color = other.Color;
+        HairData = other.HairData;
+        HatData = other.HatData;
+        Score = new();
+        Stats = new(other.Stats);
+        Ugc = other.Ugc;
+        DropInformation = other.DropInformation;
+        if (other.PetInfo is not null)
         {
-            return new Item(10400000)
-            {
-                Uid = 2754959794416496484,
-                CreationTime = 1558494660,
-                Color = new EquipColor(),
-                FaceDecorationD = new byte[16],
-            };
+            PetInfo = new(other.PetInfo);
         }
 
-        public static Item TutorialBow(Player owner)
+        SetMetadataValues();
+
+        GemSockets = new(this);
+    }
+
+    public bool TrySplit(int splitAmount, out Item splitItem)
+    {
+        splitItem = null;
+        if (Amount < splitAmount)
         {
-            // bow 15100216
-            // [longsword]  Tairen Royal Longsword - 13200309
-            // [shield] Tairen Royal Shield - 14100279
-            // [greatsword] Tairen Royal Greatsword - 15000313
-            // [scepter] Tairen Royal Scepter - 13300308
-            // [codex] Tairen Royal Codex - 14000270
-            // [staff] Tairen Royal Staff - 15200312
-            // [cannon] Tairen Royal Cannon - 15300308
-            // [bow] Tairen Royal Bow - 15100305
-            // [dagger] Tairen Royal Knife - 13100314
-            // [star] Tairen Royal Star - 13400307
-            // [blade] Tairen Royal Blade - 15400294
-            // [knuckles] Tairen Royal Knuckles - 15500226
-            // [orb] Tairen Royal Spirit - 15600228
-            return new Item(15100216)
-            {
-                Uid = 3430503306390578751, // Make sure its unique! If the UID is equipped, it will say "Equipped" on the item in your inventory
-                Rarity = 1,
-                CreationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                Owner = owner,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xBC, 0xBC, 0xB3),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xC3, 0xDA, 0x3D),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xB0, 0xB4, 0xBA),
-                    0x13
-                ),
-                AppearanceFlag = 0x5,
-                TransferFlag = TransferFlag.Binds | TransferFlag.Splitable,
-            };
+            return false;
         }
 
-        public bool TrySplit(int amount, out Item splitItem)
-        {
-            if (Amount <= amount)
-            {
-                splitItem = null;
-                return false;
-            }
+        Amount -= splitAmount;
 
-            splitItem = new Item(this);
-            Amount -= amount;
-            splitItem.Amount = amount;
-            splitItem.Slot = -1;
-            splitItem.Uid = Environment.TickCount64;
+        splitItem = new(this)
+        {
+            Amount = splitAmount,
+            Slot = -1,
+            InventoryId = 0
+        };
+        splitItem.Uid = DatabaseManager.Items.Insert(splitItem);
+
+        return true;
+    }
+
+    public static bool IsWeapon(List<ItemSlot> slots)
+    {
+        return slots.Contains(ItemSlot.RH) || slots.Contains(ItemSlot.LH) || slots.Contains(ItemSlot.OH);
+    }
+
+    public static bool IsAccessory(List<ItemSlot> slots)
+    {
+        return slots.Contains(ItemSlot.FH) || slots.Contains(ItemSlot.EA) || slots.Contains(ItemSlot.PD) || slots.Contains(ItemSlot.BE) ||
+               slots.Contains(ItemSlot.RI);
+    }
+
+    public static bool IsArmor(List<ItemSlot> slots)
+    {
+        return slots.Contains(ItemSlot.CP) || slots.Contains(ItemSlot.CL) || slots.Contains(ItemSlot.GL) || slots.Contains(ItemSlot.SH) ||
+               slots.Contains(ItemSlot.MT);
+    }
+
+    public bool IsPet()
+    {
+        return ItemMetadataStorage.GetPetId(Id) != 0;
+    }
+
+    public bool BindItem(Player player)
+    {
+        if (OwnerCharacterId != 0 && OwnerCharacterId != player.CharacterId)
+        {
+            return false;
+        }
+
+        if (OwnerCharacterId == player.CharacterId)
+        {
             return true;
         }
 
-        public static Item DefaultScepter(Player owner)
+        OwnerAccountId = player.AccountId;
+        OwnerCharacterId = player.CharacterId;
+        OwnerCharacterName = player.Name;
+        RemainingTrades = 0;
+
+        player.Session?.Send(ItemInventoryPacket.UpdateItem(this));
+        return true;
+    }
+
+    public bool IsBound()
+    {
+        return OwnerCharacterId != 0;
+    }
+
+    public bool IsSelfBound(long characterId)
+    {
+        return OwnerCharacterId == characterId;
+    }
+
+    public bool IsExpired()
+    {
+        return TimeInfo.Now() > ExpiryTime && ExpiryTime != 0;
+    }
+
+    public void DecreaseTradeCount()
+    {
+        if (!TransferFlag.HasFlag(ItemTransferFlag.LimitedTradeCount))
         {
-            return new Item(13300308)
-            {
-                Uid = 3430503306390578751, // Make sure its unique! If the UID is equipped, it will say "Equipped" on the item in your inventory
-                Rarity = 1,
-                CreationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                Owner = owner,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xBC, 0xBC, 0xB3),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xC3, 0xDA, 0x3D),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xB0, 0xB4, 0xBA),
-                    0x13
-                ),
-                AppearanceFlag = 0x5,
-                TransferFlag = TransferFlag.Binds | TransferFlag.Splitable,
-            };
+            return;
         }
 
-        public static Item DefaultCodex(Player owner)
-        {
-            return new Item(14000270)
-            {
-                Uid = 3430503306390578751, // Make sure its unique! If the UID is equipped, it will say "Equipped" on the item in your inventory
-                Rarity = 1,
-                CreationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                Owner = owner,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xBC, 0xBC, 0xB3),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xC3, 0xDA, 0x3D),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xB0, 0xB4, 0xBA),
-                    0x13
-                ),
-                AppearanceFlag = 0x5,
-                TransferFlag = TransferFlag.Binds | TransferFlag.Splitable,
-            };
-        }
-        // MALE ITEMS
-        public static Item HairMale()
-        {
-            return new Item(10200003)
-            {
-                Uid = 2867972925711604442,
-                CreationTime = 1565575851,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x69, 0xB5),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x85, 0xDB),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x48, 0x5E, 0xA8),
-                    4
-                ),
-                HairD = new HairData(0.3f, 0.3f, new byte[24], new byte[24]),
-                AppearanceFlag = 2,
-            };
-        }
-        public static Item EarMale()
-        {
-            return new Item(10500001)
-            {
-                Uid = 2754959794416496488,
-                CreationTime = 1558494660,
-                Color = new EquipColor(),
-            };
-        }
-        public static Item FaceMale()
-        {
-            return new Item(10300051)
-            {
-                Uid = 2754959794416496483,
-                CreationTime = 1558494660,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x7E, 0xF3, 0xF8),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0xF7, 0xE3, 0xE3),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x14, 0x07, 0x02),
-                    0
-                ),
-                AppearanceFlag = 3,
-            };
-        }
-        public static Item FaceDecorationMale()
-        {
-            return new Item(10400002)
-            {
-                Uid = 2754959794416496484,
-                CreationTime = 1558494660,
-                Color = new EquipColor(),
-                FaceDecorationD = new byte[16],
-            };
-        }
-        public static Item CloathMale()
-        {
-            return new Item(12200398)
-            {
-                Uid = 2754959794416496484,
-                CreationTime = 1558494660,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x69, 0xB5),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x85, 0xDB),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x48, 0x5E, 0xA8),
-                    4
-                ),
-            };
-        }
-        public static Item ShoesMale()
-        {
-            return new Item(11700852)
-            {
-                Uid = 2754959794416496484,
-                CreationTime = 1558494660,
-                Color = EquipColor.Custom(
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x69, 0xB5),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x4C, 0x85, 0xDB),
-                    Maple2Storage.Types.Color.Argb(0xFF, 0x48, 0x5E, 0xA8),
-                    4
-                ),
-            };
-        }
+        RemainingTrades--;
     }
+
+    public void SetMetadataValues()
+    {
+        ItemPropertyMetadata property = ItemMetadataStorage.GetPropertyMetadata(Id);
+        ItemLimitMetadata limit = ItemMetadataStorage.GetLimitMetadata(Id);
+        ItemMusicMetadata music = ItemMetadataStorage.GetMusicMetadata(Id);
+        ItemSkillMetadata skill = ItemMetadataStorage.GetSkillMetadata(Id);
+        ItemHousingMetadata housing = ItemMetadataStorage.GetHousingMetadata(Id);
+        InventoryTab? inventoryTab = ItemMetadataStorage.GetTab(Id);
+        if (inventoryTab is not null)
+        {
+            InventoryTab = (InventoryTab) inventoryTab;
+        }
+
+        GemSlot? gemSlot = ItemMetadataStorage.GetGem(Id);
+        if (gemSlot is not null)
+        {
+            GemSlot = (GemSlot) gemSlot;
+        }
+
+        StackLimit = property.StackLimit;
+        EnableBreak = limit.Breakable;
+        IsCustomScore = music.IsCustomScore;
+        FileName = music.FileName;
+        Gender = limit.Gender;
+        SkillId = skill.SkillId;
+        RecommendJobs = ItemMetadataStorage.GetRecommendJobs(Id);
+        Function = ItemMetadataStorage.GetFunctionMetadata(Id);
+        Tag = ItemMetadataStorage.GetTag(Id);
+        ShopID = ItemMetadataStorage.GetShopID(Id) ?? 0;
+        TransferType = limit.TransferType;
+        TransferFlag = ItemMetadataStorage.GetTransferFlag(Id, Rarity);
+        HousingCategory = housing.HousingCategory;
+        BlackMarketCategory = property.BlackMarketCategory;
+        Category = property.Category;
+        DisableEnchant = limit.DisableEnchant;
+        AdditionalEffects = ItemMetadataStorage.GetAdditionalEffects(Id);
+        Type = GetItemType();
+    }
+
+    public ItemType GetItemType()
+    {
+        //TODO: Find a better method to find the item type
+        return (Id / 100000) switch
+        {
+            112 => ItemType.Earring,
+            113 => ItemType.Hat,
+            114 => ItemType.Clothes,
+            115 => ItemType.Pants,
+            116 => ItemType.Gloves,
+            117 => ItemType.Shoes,
+            118 => ItemType.Cape,
+            119 => ItemType.Necklace,
+            120 => ItemType.Ring,
+            121 => ItemType.Belt,
+            122 => ItemType.Overall,
+            130 => ItemType.Bludgeon,
+            131 => ItemType.Dagger,
+            132 => ItemType.Longsword,
+            133 => ItemType.Scepter,
+            134 => ItemType.ThrowingStar,
+            140 => ItemType.Spellbook,
+            141 => ItemType.Shield,
+            150 => ItemType.Greatsword,
+            151 => ItemType.Bow,
+            152 => ItemType.Staff,
+            153 => ItemType.Cannon,
+            154 => ItemType.Blade,
+            155 => ItemType.Knuckle,
+            156 => ItemType.Orb,
+            209 => ItemType.Medal,
+            410 or 420 or 430 => ItemType.Lapenshard,
+            501 or 502 or 503 or 504 or 505 => ItemType.Furnishing,
+            600 => ItemType.Pet,
+            900 => ItemType.Currency,
+            _ => ItemType.None
+        };
+    }
+
+    public bool CanEquip(GameSession session)
+    {
+        NoticeType noticeType = NoticeType.Chat | NoticeType.FastText;
+        if (ItemMetadataStorage.GetLimitMetadata(Id).VipOnly && !session.Player.Account.IsVip())
+        {
+            return false;
+        }
+
+        if (Gender != Gender.Neutral && Gender != session.Player.Gender)
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ErrorGender, noticeType));
+            return false;
+        }
+
+        if (IsBound() && !IsSelfBound(session.Player.CharacterId))
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrPutonInvalidBinding, noticeType));
+            return false;
+        }
+
+        List<JobCode> jobs = ItemMetadataStorage.GetRequiredJobs(Id);
+        if (!jobs.Contains(JobCode.None) && !jobs.Contains(session.Player.JobCode))
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrPutonJob, noticeType));
+            return false;
+        }
+
+        if (IsExpired())
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrPutonExpired, noticeType));
+            return false;
+        }
+
+        // TODO: Handle PC Bang
+
+        if (Level > session.Player.Levels.Level)
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrPutonLowLevel, noticeType));
+            return false;
+        }
+
+        int maxLevel = ItemMetadataStorage.GetLimitMetadata(Id).LevelLimitMax;
+        return maxLevel == 0 || maxLevel >= session.Player.Levels.Level;
+    }
+
+    public bool CanUse(GameSession session)
+    {
+        NoticeType noticeType = NoticeType.Chat | NoticeType.FastText;
+
+        if (ItemMetadataStorage.GetLimitMetadata(Id).VipOnly && !session.Player.Account.IsVip())
+        {
+            return false;
+        }
+
+        if (Gender != Gender.Neutral && Gender != session.Player.Gender)
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ErrorGender, noticeType));
+            return false;
+        }
+
+        if (IsBound() && !IsSelfBound(session.Player.CharacterId))
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrUseInvalidBinding, noticeType));
+            return false;
+        }
+
+        List<JobCode> jobs = ItemMetadataStorage.GetRequiredJobs(Id);
+        if (!jobs.Contains(JobCode.None) && !jobs.Contains(session.Player.JobCode))
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrDisableJob, noticeType));
+            return false;
+        }
+
+        if (IsExpired())
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrPutonExpired, noticeType));
+            return false;
+        }
+
+        // TODO: Handle PC Bang
+
+        if (Level > session.Player.Levels.Level)
+        {
+            session.Send(NoticePacket.Notice(SystemNotice.ItemErrUseLowLevel, noticeType));
+            return false;
+        }
+
+        int maxLevel = ItemMetadataStorage.GetLimitMetadata(Id).LevelLimitMax;
+        if (maxLevel != 0)
+        {
+            return maxLevel >= session.Player.Levels.Level;
+        }
+
+        return true;
+    }
+
+    public int GetGearScore()
+    {
+        int gearScoreFactor = ItemMetadataStorage.GetPropertyMetadata(Id).GearScoreFactor;
+        Script script = ScriptLoader.GetScript("Functions/calcItemValues");
+        DynValue? result = script.RunFunction("calcItemGearScore", gearScoreFactor, Rarity, (int) Type, EnchantLevel, LimitBreakLevel);
+
+        if (result is null)
+        {
+            return 0;
+        }
+
+        return (int) result.Tuple[0].Number + (int) result.Tuple[1].Number;
+    }
+}
+
+public class DropInformation
+{
+    public int SourceObjectId;
+
+    public long BoundToCharacterId;
+
+    // Used to stop fadeout task
+    public readonly CancellationTokenSource CancellationToken = new();
 }

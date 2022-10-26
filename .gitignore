@@ -10,5 +10,9 @@ GameDataParser/Properties
 MapleServer2/Properties
 Maple2Storage/Resources
 Ms2Database/Migrations
+MapleWebServer/Data
 workspace.code-workspace
-build.bat
+.env
+MapleServer2/PacketStructures
+MapleServer2.sln.DotSettings.user
+Logs/

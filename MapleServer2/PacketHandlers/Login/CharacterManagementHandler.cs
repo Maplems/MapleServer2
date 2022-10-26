@@ -1,194 +1,179 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Net;
+﻿using System.Net;
+using Maple2Storage.Enums;
 using Maple2Storage.Types;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
-using MapleServer2.Data;
+using MapleServer2.Data.Static;
+using MapleServer2.Database;
 using MapleServer2.Enums;
-using MapleServer2.Extensions;
 using MapleServer2.Packets;
-using MapleServer2.Servers.Game;
 using MapleServer2.Servers.Login;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Login
+namespace MapleServer2.PacketHandlers.Login;
+
+public class CharacterManagementHandler : LoginPacketHandler<CharacterManagementHandler>
 {
-    public class CharacterManagementHandler : LoginPacketHandler
+    public override RecvOp OpCode => RecvOp.CharManagement;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.CHARACTER_MANAGEMENT;
+        Login = 0x0,
+        Create = 0x1,
+        Delete = 0x2
+    }
 
-        public CharacterManagementHandler(ILogger<CharacterManagementHandler> logger) : base(logger) { }
-
-        public override void Handle(LoginSession session, PacketReader packet)
+    public override void Handle(LoginSession session, PacketReader packet)
+    {
+        Mode mode = (Mode) packet.ReadByte();
+        switch (mode)
         {
-            byte mode = packet.ReadByte();
-            switch (mode)
-            {
-                case 0: // Login
-                    HandleSelect(session, packet);
-                    break;
-                case 1: // Create
-                    HandleCreate(session, packet);
-                    break;
-                case 2: // Delete
-                    long deleteCharId = packet.ReadLong();
-                    Logger.Info($"Deleting {deleteCharId}");
-                    break;
-                default:
-                    throw new ArgumentException($"Invalid Char select mode {mode}");
-            }
+            case Mode.Login:
+                HandleSelect(session, packet);
+                break;
+            case Mode.Create:
+                HandleCreate(session, packet);
+                break;
+            case Mode.Delete:
+                HandleDelete(session, packet);
+                break;
+            default:
+                LogUnknownMode(mode);
+                break;
+        }
+    }
+
+    private void HandleDelete(LoginSession session, PacketReader packet)
+    {
+        long characterId = packet.ReadLong();
+        if (!DatabaseManager.Characters.SetCharacterDeleted(characterId))
+        {
+            Logger.Error("Could not delete character");
+            return;
+        }
+        session.Send(CharacterListPacket.DeleteCharacter(characterId));
+        Logger.Information("Character id {characterId} deleted!", characterId);
+    }
+
+    private void HandleSelect(LoginSession session, PacketReader packet)
+    {
+        long characterId = packet.ReadLong();
+        packet.ReadShort(); // 01 00
+        Logger.Information("Logging in to game with char id: {characterId}", characterId);
+
+        string ipAddress = session.IsLocalHost() ? Constant.LocalHost : Environment.GetEnvironmentVariable("IP");
+        int port = int.Parse(Environment.GetEnvironmentVariable("GAME_PORT"));
+        IPEndPoint endpoint = new(IPAddress.Parse(ipAddress), port);
+
+        AuthData authData = DatabaseManager.AuthData.GetByAccountId(session.AccountId);
+        Player player = DatabaseManager.Characters.FindPartialPlayerById(characterId);
+        if (player is null)
+        {
+            Logger.Error("Character not found!");
+            return;
         }
 
-        public void HandleSelect(LoginSession session, PacketReader packet)
+        authData.OnlineCharacterId = characterId;
+
+        DatabaseManager.AuthData.UpdateOnlineCharacterId(authData);
+        DatabaseManager.Characters.UpdateChannelId(characterId, channelId: 1, instanceId: 1, isMigrating: false);
+
+        session.SendFinal(MigrationPacket.LoginToGame(endpoint, player.MapId, authData), logoutNotice: false);
+    }
+
+    private static void HandleCreate(LoginSession session, PacketReader packet)
+    {
+        Gender gender = (Gender) packet.ReadByte();
+        JobCode jobCode = (JobCode) packet.ReadShort();
+        string name = packet.ReadUnicodeString();
+        SkinColor skinColor = packet.Read<SkinColor>();
+        packet.Skip(2);
+
+        switch (name.Length)
         {
-            long charId = packet.ReadLong();
-            packet.ReadShort(); // 01 00
-            Logger.Info($"Logging in to game with char id: {charId}");
-
-            IPEndPoint endpoint = new IPEndPoint(IPAddress.Loopback, GameServer.PORT);
-            AuthData authData = new AuthData
-            {
-                TokenA = session.GetToken(),
-                TokenB = session.GetToken(),
-                CharacterId = charId,
-            };
-            // Write AuthData to storage shared with GameServer
-            AuthStorage.SetData(session.AccountId, authData);
-
-            session.SendFinal(MigrationPacket.LoginToGame(endpoint, authData));
-
-            // LoginPacket.LoginError("message?");
+            case <= 1:
+                session.Send(ResponseCharCreatePacket.Error(ResponseCharCreatePacket.Mode.NameNeeds2LettersMinimum));
+                return;
+            case > 13:
+                session.Send(ResponseCharCreatePacket.Error(ResponseCharCreatePacket.Mode.MaxCharactersReached));
+                return;
         }
 
-        public void HandleCreate(LoginSession session, PacketReader packet)
+        if (DatabaseManager.Characters.NameExists(name))
         {
-            byte gender = packet.ReadByte();
-            //packet.ReadShort(); // const?
-            // var jobCode = (Job)packet.ReadShort();
-            Job job = (Job) packet.ReadShort();
-            string name = packet.ReadUnicodeString();
-            SkinColor skinColor = packet.Read<SkinColor>();
-            //packet.ReadShort(); // const?
-            packet.Skip(2);
-            Dictionary<ItemSlot, Item> equips = new Dictionary<ItemSlot, Item>();
+            session.Send(ResponseCharCreatePacket.Error(ResponseCharCreatePacket.Mode.NameIsTaken));
+            return;
+        }
 
-            Logger.Info($"Creating character: {name}, gender: {gender}, skinColor: {skinColor}, job: {job}");
+        if (CharacterCreateMetadataStorage.JobIsDisabled((int) jobCode))
+        {
+            session.Send(ResponseCharCreatePacket.Error(ResponseCharCreatePacket.Mode.JobRestriction));
+            return;
+        }
 
-            int equipCount = packet.ReadByte();
-            for (int i = 0; i < equipCount; i++)
+        Account account = DatabaseManager.Accounts.FindById(session.AccountId);
+
+        List<Item> equips = new();
+        byte equipCount = packet.ReadByte();
+        for (int i = 0; i < equipCount; i++)
+        {
+            int id = packet.ReadInt();
+            string typeStr = packet.ReadUnicodeString();
+            if (!Enum.TryParse(typeStr, out ItemSlot type) || !DefaultItemsMetadataStorage.IsValid((int) jobCode, id))
             {
-                uint id = packet.ReadUInt();
-                string typeStr = packet.ReadUnicodeString();
-                if (!Enum.TryParse(typeStr, out ItemSlot type))
-                {
-                    throw new ArgumentException($"Unknown equip type: {typeStr}");
-                }
-                EquipColor equipColor = packet.Read<EquipColor>();
-                int colorIndex = packet.ReadInt();
-
-                switch (type)
-                {
-                    case ItemSlot.HR: // Hair
-                        // Hair Length/Position
-                        float backLength = BitConverter.ToSingle(packet.Read(4), 0);
-                        byte[] backPositionArray = packet.Read(24);
-                        float frontLength = BitConverter.ToSingle(packet.Read(4), 0);
-                        byte[] frontPositionArray = packet.Read(24);
-
-                        equips.Add(ItemSlot.HR, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            HairD = new HairData(backLength, frontLength, backPositionArray, frontPositionArray),
-                            IsTemplate = false,
-                        });
-                        break;
-                    case ItemSlot.FA: // Face
-                        equips.Add(ItemSlot.FA, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            IsTemplate = false,
-                        });
-                        break;
-                    case ItemSlot.FD: // Face Decoration
-                        byte[] faceDecoration = packet.Read(16); // Face decoration position
-                        equips.Add(ItemSlot.FD, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            FaceDecorationD = faceDecoration,
-                            IsTemplate = false,
-                        });
-                        break;
-                    case ItemSlot.CL: // Clothes
-                        equips.Add(ItemSlot.CL, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            IsTemplate = false,
-                        });
-                        break;
-                    case ItemSlot.PA: // Pants
-                        equips.Add(ItemSlot.PA, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            IsTemplate = false,
-                        });
-                        break;
-                    case ItemSlot.SH: // Shoes
-                        equips.Add(ItemSlot.SH, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            IsTemplate = false,
-                        });
-                        break;
-                    case ItemSlot.ER: // Ear
-                        // Assign ER
-                        equips.Add(ItemSlot.ER, new Item(Convert.ToInt32(id))
-                        {
-                            CreationTime = 1565575851,
-                            Color = equipColor,
-                            IsTemplate = false,
-                        });
-                        break;
-                }
-                Logger.Info($" > {type} - id: {id}, color: {equipColor}, colorIndex: {colorIndex}");
-            }
-            packet.ReadInt(); // const? (4)
-
-            // Check if name is in use (currently just on local account)
-            bool taken = false;
-
-            foreach (Player character in AccountStorage.Characters.Values)
-            {
-                if (character.Name.ToLower().Equals(name.ToLower()))
-                {
-                    taken = true;
-                }
-            }
-
-            if (taken)
-            {
-                session.Send(ResponseCharCreatePacket.NameTaken());
+                session.Send(ResponseCharCreatePacket.Error(ResponseCharCreatePacket.Mode.IncorrectGear));
                 return;
             }
 
-            // Create new player object
-            Player newCharacter = Player.NewCharacter(gender, job, name, skinColor, equips);
+            EquipColor equipColor = packet.Read<EquipColor>();
+            HairData hair = new();
+            byte[] faceDecoration = new byte[16];
 
-            // Add player object to account storage
-            AccountStorage.AddCharacter(newCharacter);
+            switch (type)
+            {
+                case ItemSlot.HR:
+                    float backLength = packet.ReadFloat();
+                    CoordF backPositionCoord = packet.Read<CoordF>();
+                    CoordF backPositionRotation = packet.Read<CoordF>();
+                    float frontLength = packet.ReadFloat();
+                    CoordF frontPositionCoord = packet.Read<CoordF>();
+                    CoordF frontPositionRotation = packet.Read<CoordF>();
+                    hair = new(backLength, frontLength, backPositionCoord, backPositionRotation, frontPositionCoord, frontPositionRotation);
+                    break;
+                case ItemSlot.FD:
+                    faceDecoration = packet.ReadBytes(16);
+                    break;
+            }
 
-            // Send updated CHAR_MAX_COUNT
-            session.Send(CharacterListPacket.SetMax(4, 6));
-
-            // Send CHARACTER_LIST for new character only (append)
-            session.Send(CharacterListPacket.AppendEntry(newCharacter));
+            equips.Add(new(id)
+            {
+                Color = equipColor,
+                HairData = hair,
+                FaceDecorationData = faceDecoration,
+                ItemSlot = type
+            });
         }
+
+        // create character
+        Player newCharacter = new(account, name, gender, jobCode, skinColor);
+        session.CharacterId = newCharacter.CharacterId;
+
+        // equip each item
+        foreach (Item item in equips)
+        {
+            item.IsEquipped = true;
+            item.BindItem(newCharacter);
+            newCharacter.Inventory.Cosmetics.Add(item.ItemSlot, item);
+        }
+
+        packet.ReadInt(); // const? (4)
+
+        DatabaseManager.Inventories.Update(newCharacter.Inventory);
+
+        // Send updated CHAR_MAX_COUNT
+        session.Send(CharacterListPacket.SetMax(account.CharacterSlots));
+
+        // Send CHARACTER_LIST for new character only (append)
+        session.Send(CharacterListPacket.AppendEntry(newCharacter));
     }
 }

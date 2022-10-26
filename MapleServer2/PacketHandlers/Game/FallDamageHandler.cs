@@ -1,22 +1,36 @@
-﻿using MaplePacketLib2.Tools;
+﻿using Maple2Storage.Types;
+using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Enums;
+using MapleServer2.Managers;
+using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class FallDamageHandler : GamePacketHandler<FallDamageHandler>
 {
-    public class FallDamageHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.StateFallDamage;
+
+    public override void Handle(GameSession session, PacketReader packet)
     {
-        public override RecvOp OpCode => RecvOp.STATE_FALL_DAMAGE;
-
-        public FallDamageHandler(ILogger<FallDamageHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+        float distance = packet.ReadFloat();
+        if (distance > Block.BLOCK_SIZE * 6)
         {
-            if (session.Player.OnAirMount)
+            if (session.Player.Mount != null && session.Player.Levels.PrestigeLevel < (int) PrestigePerk.SafeRiding)
             {
-                session.Player.OnAirMount = false;
+                session.FieldManager.BroadcastPacket(MountPacket.StopRide(session.Player.FieldPlayer));
             }
+
+            session.Player.FallDamage();
+            TrophyManager.OnFallDamage(session.Player);
         }
+
+        if (session.Player.OnAirMount)
+        {
+            session.Player.OnAirMount = false;
+        }
+
+        TrophyManager.OnFall(session.Player, distance);
     }
 }

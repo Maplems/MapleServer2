@@ -1,60 +1,66 @@
-﻿using System;
-using MaplePacketLib2.Tools;
+﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+// Whenever server sends 02, client makes a request
+//
+// 01 and 03 seem to be the first ones sent after entering game
+// perhaps setting some initial state?
+public static class TimeSyncPacket
 {
-    // Whenever server sends 02, client makes a request
-    //
-    // 01 and 03 seem to be the first ones sent after entering game
-    // perhaps setting some initial state?
-    public static class TimeSyncPacket
+    private enum Mode : byte
     {
-        public static Packet Response(int key)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_TIME_SYNC);
-            pWriter.WriteByte(0x00); // Response
-            pWriter.WriteInt(Environment.TickCount);
-            pWriter.WriteLong(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            pWriter.WriteByte();
-            pWriter.WriteInt();
-            pWriter.WriteInt(key);
+        SetSessionServerTick = 0x0,
+        SetInitial1 = 0x1,
+        Request = 0x2,
+        SetInitial2 = 0x3
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter SetSessionServerTick(int key)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseTimeSync);
+        pWriter.Write(Mode.SetSessionServerTick);
+        pWriter.WriteInt(Environment.TickCount);
+        pWriter.WriteLong(TimeInfo.Now());
+        pWriter.WriteByte();
+        pWriter.WriteInt();
+        pWriter.WriteInt(key);
 
-        // Request client to make a request
-        public static Packet Request()
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_TIME_SYNC);
-            pWriter.WriteByte(0x02); // 1 and 2
-            pWriter.WriteInt(Environment.TickCount);
-            pWriter.WriteLong(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            pWriter.WriteByte();
-            pWriter.WriteInt();
+        return pWriter;
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter SetInitial1()
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseTimeSync);
+        pWriter.Write(Mode.SetInitial1);
+        pWriter.WriteInt(Environment.TickCount);
+        pWriter.WriteLong(TimeInfo.Now());
+        pWriter.WriteByte();
+        pWriter.WriteInt();
 
-        public static Packet SetInitial1()
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_TIME_SYNC);
-            pWriter.WriteByte(0x01); // 1 and 2
-            pWriter.WriteInt(Environment.TickCount);
-            pWriter.WriteLong(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            pWriter.WriteByte();
-            pWriter.WriteInt();
+        return pWriter;
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter Request()
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseTimeSync);
+        pWriter.Write(Mode.Request);
+        pWriter.WriteInt(Environment.TickCount);
+        pWriter.WriteLong(TimeInfo.Now());
+        pWriter.WriteByte();
+        pWriter.WriteInt();
 
-        public static Packet SetInitial2()
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_TIME_SYNC);
-            pWriter.WriteByte(0x03);
-            pWriter.WriteLong(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        return pWriter;
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter SetInitial2()
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseTimeSync);
+        pWriter.Write(Mode.SetInitial2);
+        pWriter.WriteLong(TimeInfo.Now());
+
+        return pWriter;
     }
 }

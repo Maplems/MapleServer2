@@ -1,103 +1,130 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Threading;
-using MaplePacketLib2.Tools;
+﻿using System.Diagnostics;
+using Maple2Storage.Types;
+using MapleServer2.Data.Static;
+using MapleServer2.Database;
 using MapleServer2.Enums;
+using MapleServer2.Managers;
 using MapleServer2.Network;
 using MapleServer2.Packets;
 using MapleServer2.Tools;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.Servers.Game
+namespace MapleServer2.Servers.Game;
+
+public class GameSession : Session
 {
-    public class GameSession : Session
+    protected override PatchType Type => PatchType.Ignore;
+
+    public int ServerTick;
+    public int ClientTick;
+
+    public Player Player;
+
+    public FieldManager FieldManager { get; private set; }
+
+    public void SendNotice(string message)
     {
-        protected override SessionType Type => SessionType.Game;
+        Send(ChatPacket.Send(Player, message, ChatType.NoticeAlert));
+    }
 
-        // TODO: Come up with a better solution
-        // Using this for now to store arbitrary state objects by key.
-        public readonly Dictionary<string, object> StateStorage;
+    // Called first time when starting a new session
+    public void InitPlayer(Player player)
+    {
+        Debug.Assert(player.FieldPlayer == null, "Not allowed to reinitialize player.");
 
-        public int ServerTick { get; private set; }
-        public int ClientTick;
+        Player = player;
+        FieldManager = FieldManagerFactory.GetManager(player);
+        player.FieldPlayer = FieldManager.RequestCharacter(player);
+        player.LastLogTime = TimeInfo.Now();
+    }
 
-        public IFieldObject<Player> FieldPlayer { get; private set; }
-        public Player Player => FieldPlayer.Value;
-
-        public FieldManager FieldManager { get; private set; }
-
-        private readonly ManagerFactory<FieldManager> FieldManagerFactory;
-
-        // TODO: Replace this with a scheduler.
-        private readonly CancellationTokenSource CancellationToken;
-
-        public GameSession(ManagerFactory<FieldManager> fieldManagerFactory, ILogger<GameSession> logger) : base(logger)
+    public void EnterField(Player player)
+    {
+        // If moving maps, need to get the FieldManager for new map
+        if (player.MapId != FieldManager.MapId || player.InstanceId != FieldManager.InstanceId)
         {
-            FieldManagerFactory = fieldManagerFactory;
-            CancellationToken = new CancellationTokenSource();
-            StateStorage = new Dictionary<string, object>();
+            // Initialize for new Map
+            FieldManager = FieldManagerFactory.GetManager(player);
+            player.FieldPlayer = FieldManager.RequestCharacter(player);
+        }
 
-            // Continuously sends field updates to client
-            new Thread(() =>
+        FieldManager.AddPlayer(this);
+    }
+
+    protected override void EndSession(bool logoutNotice)
+    {
+        if (Player is null || FieldManager is null)
+        {
+            return;
+        }
+
+        FieldManager.RemovePlayer(Player);
+        GameServer.PlayerManager.RemovePlayer(Player);
+
+        Player.OnlineCTS?.Cancel();
+        Player.OnlineTimeThread = null;
+        Player.TimeSyncTask = null;
+
+        CoordF safeCoord = Player.SafeBlock;
+        safeCoord.Z += Block.BLOCK_SIZE;
+        Player.SavedCoord = safeCoord;
+
+        // if session is not changing channels or servers, send the logout message
+        if (logoutNotice)
+        {
+            Player.Session = null;
+            GameServer.BuddyManager.SetFriendSessions(Player);
+
+            Player.Party?.CheckOfflineParty(Player);
+
+            Player.Guild?.BroadcastPacketGuild(GuildPacket.MemberLoggedOff(Player));
+
+            Player.UpdateBuddies();
+
+            foreach (Club club in Player.Clubs)
             {
-                while (!CancellationToken.IsCancellationRequested)
-                {
-                    if (FieldManager != null)
-                    {
-                        foreach (Packet update in FieldManager.GetUpdates())
-                        {
-                            Send(update);
-                        }
-                    }
-                    Thread.Sleep(1000);
-                }
-            }).Start();
-        }
-
-        public void SendNotice(string message)
-        {
-            Send(ChatPacket.Send(Player, message, ChatType.NoticeAlert));
-        }
-
-        // Called first time when starting a new session
-        public void InitPlayer(Player player)
-        {
-            Debug.Assert(FieldPlayer == null, "Not allowed to reinitialize player.");
-            FieldManager = FieldManagerFactory.GetManager(player.MapId);
-            FieldPlayer = FieldManager.RequestFieldObject(player);
-            GameServer.Storage.AddPlayer(player);
-        }
-
-        public void EnterField(int newMapId)
-        {
-            // If moving maps, need to get the FieldManager for new map
-            if (newMapId != FieldManager.MapId)
-            {
-                FieldManager.RemovePlayer(this, FieldPlayer); // Leave previous field
-                FieldManagerFactory.Release(FieldManager.MapId);
-
-                // Initialize for new Map
-                FieldManager = FieldManagerFactory.GetManager(newMapId);
-                FieldPlayer = FieldManager.RequestFieldObject(Player);
+                club?.BroadcastPacketClub(ClubPacket.LogoutNotice(Player, club));
             }
 
-            FieldManager.AddPlayer(this, FieldPlayer); // Add player
+            foreach (GroupChat groupChat in Player.GroupChats)
+            {
+                groupChat?.BroadcastPacketGroupChat(GroupChatPacket.LogoutNotice(groupChat, Player));
+                groupChat?.CheckOfflineGroupChat();
+            }
+
+            Player.IsMigrating = false;
+
+            if (MapMetadataStorage.MapIsInstancedOnly(Player.MapId) && !MapMetadataStorage.MapIsTutorial(Player.MapId))
+            {
+                Player.SavedCoord = Player.ReturnCoord;
+                Player.MapId = Player.ReturnMapId;
+            }
+
+            AuthData authData = Player.Account.AuthData;
+            authData.OnlineCharacterId = 0;
+            DatabaseManager.AuthData.UpdateOnlineCharacterId(authData);
         }
 
-        public void SyncTicks()
+        List<GameEventUserValue> userTimeValues = Player.EventUserValues.Where(x => x.EventType == GameEventUserValueType.AttendanceAccumulatedTime).ToList();
+        foreach (GameEventUserValue userValue in userTimeValues)
         {
-            ServerTick = Environment.TickCount;
-            Send(RequestPacket.TickSync(ServerTick));
+            if (!long.TryParse(userValue.EventValue, out long timeAccumulated))
+            {
+                timeAccumulated = 0;
+            }
+
+            timeAccumulated += TimeInfo.Now() - Player.LastLogTime;
+            userValue.EventValue = timeAccumulated.ToString();
+            DatabaseManager.GameEventUserValue.Update(userValue);
         }
 
-        public override void EndSession()
+        Player.LastLogTime = TimeInfo.Now();
+        Player.Account.LastLogTime = TimeInfo.Now();
+        if (Player.GuildMember is not null)
         {
-            FieldManager.RemovePlayer(this, FieldPlayer);
-            GameServer.Storage.RemovePlayer(FieldPlayer.Value);
-            CancellationToken.Cancel();
-            // Should we Join the thread to wait for it to complete?
+            Player.GuildMember.LastLogTimestamp = TimeInfo.Now();
         }
+
+        DatabaseManager.Characters.Update(Player);
     }
 }

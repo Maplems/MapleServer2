@@ -1,77 +1,99 @@
-﻿using System.Collections.Generic;
-using System.Linq;
+﻿using Maple2Storage.Enums;
 using MapleServer2.Enums;
 
-namespace MapleServer2.Types
+namespace MapleServer2.Types;
+
+public struct ExtraSkillPoints
 {
-    public class StatDistribution
+    public readonly Dictionary<short, int> ExtraPoints;
+
+    public ExtraSkillPoints()
     {
-        public int TotalStatPoints { get; private set; }
-        public Dictionary<OtherStatsIndex, int> OtherStats { get; private set; }
+        ExtraPoints = new Dictionary<short, int>();
+    }
+}
 
-        public Dictionary<byte, int> AllocatedStats { get; private set; }
-        // key = index representing the stat type (ie. a value of 00 corresponds to Str)
-        // value = number of points allocated to the stat
+public enum SkillPointSource
+{
+    Trophy = 1,
+    Chapter = 2,
+    Unknown = 3
+}
 
-        public StatDistribution(int totalStats = 0, Dictionary<byte, int> allocatedStats = null, Dictionary<OtherStatsIndex, int> otherStats = null)
+public class StatDistribution
+{
+    public int TotalStatPoints;
+    public Dictionary<OtherStatsIndex, int> OtherStats { get; } // Dictionary of OtherStatsIndex and amount of points allocated to it
+    public Dictionary<StatAttribute, int> AllocatedStats { get; } // Dictionary of StatId and amount of stat points allocated to it
+
+    private const int MaxSkillSources = 3;
+    private const short MaxSkillJobRanks = 2;
+    public int TotalExtraSkillPoints;
+    public Dictionary<SkillPointSource, ExtraSkillPoints> ExtraSkillPoints { get; }
+
+    public StatDistribution(int totalStats = 0, Dictionary<StatAttribute, int> allocatedStats = null, Dictionary<OtherStatsIndex, int> otherStats = null)
+    {
+        TotalStatPoints = totalStats;
+        AllocatedStats = allocatedStats ?? new Dictionary<StatAttribute, int>();
+        OtherStats = otherStats ?? new Dictionary<OtherStatsIndex, int>();
+        ExtraSkillPoints = new Dictionary<SkillPointSource, ExtraSkillPoints>();
+
+        foreach (int source in Enumerable.Range(0, MaxSkillSources))
         {
-            // hardcode the amount of stat points the character starts with temporarily
-            TotalStatPoints = totalStats;
-            AllocatedStats = allocatedStats ?? new Dictionary<byte, int>();
-            OtherStats = otherStats ?? new Dictionary<OtherStatsIndex, int>();
+            ExtraSkillPoints sourcePoints = new ExtraSkillPoints();
 
-            AddTotalStatPoints(1, OtherStatsIndex.Quest);
-            AddTotalStatPoints(2, OtherStatsIndex.Trophy);
-            AddTotalStatPoints(3, OtherStatsIndex.Exploration);
-            AddTotalStatPoints(4, OtherStatsIndex.Prestige);
-        }
-
-        public void AddTotalStatPoints(int amount)
-        {
-            TotalStatPoints += amount;
-        }
-
-        public void AddTotalStatPoints(int amount, OtherStatsIndex pointSrc)
-        {
-            if (OtherStats.ContainsKey(pointSrc))
+            foreach (short jobRank in Enumerable.Range(0, MaxSkillJobRanks))
             {
-                OtherStats[pointSrc] += amount;
+                sourcePoints.ExtraPoints[jobRank] = 0;
             }
-            else
-            {
-                OtherStats[pointSrc] = amount;
-            }
-            TotalStatPoints += amount;
-        }
 
-        public void AddPoint(byte statType)
+            ExtraSkillPoints[(SkillPointSource) source] = sourcePoints;
+        }
+    }
+
+    public void AddTotalStatPoints(int amount, OtherStatsIndex pointSrc = 0)
+    {
+        TotalStatPoints += amount;
+        if (pointSrc == 0)
         {
-            if (AllocatedStats.ContainsKey(statType))
-            {
-                AllocatedStats[statType] += 1;
-            }
-            else
-            {
-                AllocatedStats[statType] = 1;
-            }
+            return;
         }
 
-        public void ResetPoints()
+        if (!OtherStats.ContainsKey(pointSrc))
         {
-            AllocatedStats.Clear();
+            OtherStats[pointSrc] = 0;
         }
 
-        public byte GetStatTypeCount()
+        OtherStats[pointSrc] += amount;
+    }
+
+    public void AddPoint(StatAttribute statType)
+    {
+        if (AllocatedStats.ContainsKey(statType))
         {
-            // returns a count of how many types of Stats have had points added to them
-            // ex. a character has Strength and Intelligence points allocated - function returns 2 
-
-            return (byte) AllocatedStats.Count;
+            AllocatedStats[statType] += 1;
+            return;
         }
 
-        public static string ToDebugString<TKey, TValue>(Dictionary<TKey, TValue> dictionary)
-        {
-            return "{" + string.Join(",", dictionary.Select(kv => kv.Key + "=" + kv.Value).ToArray()) + "}";
-        }
+        AllocatedStats[statType] = 1;
+    }
+
+    public void AddTotalSkillPoints(int amount, int rank, SkillPointSource index)
+    {
+        TotalExtraSkillPoints += amount;
+        ExtraSkillPoints[index].ExtraPoints[(short) rank] += amount;
+    }
+
+    public void ResetPoints()
+    {
+        AllocatedStats.Clear();
+    }
+
+    public byte GetStatTypeCount()
+    {
+        // returns a count of how many types of Stats have had points added to them
+        // ex. a character has Strength and Intelligence points allocated - function returns 2 
+
+        return (byte) AllocatedStats.Count;
     }
 }

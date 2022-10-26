@@ -1,52 +1,76 @@
-﻿using System.Collections.Generic;
-using System.Linq;
-using Maple2Storage.Types.Metadata;
-using MaplePacketLib2.Tools;
+﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class SkillBookTreePacket
 {
-    public static class SkillBookTreePacket
+    private enum Mode : byte
     {
-        public static Packet Open(Player character)
+        Open = 0x00,
+        Save = 0x01,
+        Rename = 0x02,
+        AddTab = 0x04
+    }
+
+    public static PacketWriter Open(Player player)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.SkillBookTree);
+
+        // Writes only skills that are learned and for the job rank tab that is opened also doesn't write default passive skills
+        pWriter.Write(Mode.Open);
+        pWriter.WriteInt(player.SkillTabs.Count);
+        pWriter.WriteLong(player.ActiveSkillTabId);
+        pWriter.WriteInt(player.SkillTabs.Count);
+        foreach (SkillTab skillTab in player.SkillTabs)
         {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.SKILL_BOOK_TREE);
+            pWriter.WriteLong(skillTab.TabId);
+            pWriter.WriteUnicodeString(skillTab.Name);
 
-            // Writes only skills that are learned and for the job rank tab that is opened also doesn't write default passive skills
-            pWriter.WriteByte(0); // Mode (0 = open) (1 = save)
-            pWriter.WriteInt(1); // Possibly always 1
-            pWriter.WriteLong(character.SkillTabs[0].Id); // Skill tab id
-            pWriter.WriteInt(1); // Repeat of last int and long
-            pWriter.WriteLong(character.SkillTabs[0].Id); // Same as previous identifier
-            pWriter.WriteUnicodeString("Build 1"); // Page name
-
-            // Get feature skills, for now just rank 1 skills, not sure how to tell which tab is opened
-            // Get first skill tab skills only for now, uncertain of how to have multiple skill tabs
-            List<SkillMetadata> skills = SkillTab.GetJobFeatureSkills(character.Job);
-            skills.RemoveAll(x => x.Learned < 1); // Remove all unlearned skills
-            pWriter.WriteInt(skills.Count); // Skill count
-
-            // List of learned skills for given tab in format (int skill_id) (int skill_level)
-            for (int i = 0; i < skills.Count; i++)
+            Dictionary<int, short> skills = skillTab.SkillLevels.Where(x => x.Value > 0).ToDictionary(x => x.Key, x => x.Value);
+            pWriter.WriteInt(skills.Count);
+            foreach ((int key, short value) in skills)
             {
-                pWriter.WriteInt(skills[i].SkillId);
-                pWriter.WriteInt(skills[i].SkillLevels.Select(x => x.Level).FirstOrDefault());
+                pWriter.WriteInt(key);
+                pWriter.WriteInt(value);
             }
-
-            return pWriter;
         }
 
-        public static Packet Save(Player character)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.SKILL_BOOK_TREE);
+        return pWriter;
+    }
 
-            pWriter.WriteByte(1); // Mode (0 = open) (1 = save)
-            pWriter.WriteLong(character.SkillTabs[0].Id); // Skill tab id
-            pWriter.WriteLong(character.SkillTabs[0].Id); // Skill tab id
-            pWriter.WriteInt(1); // Possibly always 1
+    public static PacketWriter Save(Player player, long selectedTab)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.SkillBookTree);
 
-            return pWriter;
-        }
+        pWriter.Write(Mode.Save);
+        pWriter.WriteLong(player.ActiveSkillTabId);
+        pWriter.WriteLong(selectedTab);
+        pWriter.WriteInt(2); // Set Client Mode (1 = unsaved points, 2 = no unsaved points)
+
+        return pWriter;
+    }
+
+    public static PacketWriter Rename(long id, string name)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.SkillBookTree);
+        pWriter.Write(Mode.Rename);
+        pWriter.WriteLong(id);
+        pWriter.WriteUnicodeString(name);
+        pWriter.WriteByte();
+
+        return pWriter;
+    }
+
+    public static PacketWriter AddTab(Player player)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.SkillBookTree);
+
+        pWriter.Write(Mode.AddTab);
+        pWriter.WriteInt(2);
+        pWriter.WriteLong(player.ActiveSkillTabId);
+
+        return pWriter;
     }
 }

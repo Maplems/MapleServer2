@@ -1,316 +1,396 @@
-﻿using System.Collections.Generic;
-using System.Linq;
-using MaplePacketLib2.Tools;
+﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
 using MapleServer2.Enums;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class PartyHandler : GamePacketHandler<PartyHandler>
 {
-    public class PartyHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.Party;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.PARTY;
-        public PartyHandler(ILogger<PartyHandler> logger) : base(logger) { }
+        Invite = 0x1,
+        Join = 0x2,
+        Leave = 0x3,
+        Kick = 0x4,
+        SetLeader = 0x11,
+        FinderJoin = 0x17,
+        SummonParty = 0x1D,
+        VoteKick = 0x2D,
+        ReadyCheck = 0x2E,
+        FindDungeonParty = 0x21,
+        CancelFindDungeonParty = 0x22,
+        ReadyCheckUpdate = 0x30
+    }
 
-        private enum PartyMode : byte
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode mode = (Mode) packet.ReadByte(); //Mode
+
+        switch (mode)
         {
-            Invite = 0x1,
-            Join = 0x2,
-            Leave = 0x3,
-            Kick = 0x4,
-            SetLeader = 0x11,
-            FinderJoin = 0x17,
-            VoteKick = 0x2D,
-            ReadyCheck = 0x2E,
-            ReadyCheckUpdate = 0x30
+            case Mode.Invite:
+                HandleInvite(session, packet);
+                break;
+            case Mode.Join:
+                HandleJoin(session, packet);
+                break;
+            case Mode.Leave:
+                HandleLeave(session);
+                break;
+            case Mode.Kick:
+                HandleKick(session, packet);
+                break;
+            case Mode.SetLeader:
+                HandleSetLeader(session, packet);
+                break;
+            case Mode.FinderJoin:
+                HandleFinderJoin(session, packet);
+                break;
+            case Mode.SummonParty:
+                HandleSummonParty();
+                break;
+            case Mode.VoteKick:
+                HandleVoteKick(session, packet);
+                break;
+            case Mode.ReadyCheck:
+                HandleStartReadyCheck(session);
+                break;
+            case Mode.FindDungeonParty:
+                HandleFindDungeonParty(session, packet);
+                break;
+            case Mode.ReadyCheckUpdate:
+                HandleReadyCheckUpdate(session, packet);
+                break;
+            default:
+                LogUnknownMode(mode);
+                break;
+        }
+    }
+
+    private static void HandleInvite(GameSession session, PacketReader packet)
+    {
+        string target = packet.ReadUnicodeString();
+
+        Player other = GameServer.PlayerManager.GetPlayerByName(target);
+        if (other == null)
+        {
+            return;
         }
 
-        public override void Handle(GameSession session, PacketReader packet)
+        if (session.Player.Party != null)
         {
-            PartyMode mode = (PartyMode) packet.ReadByte(); //Mode
+            Party party = session.Player.Party;
 
-            switch (mode)
+            if (party.Leader != session.Player)
             {
-                case PartyMode.Invite:
-                    HandleInvite(session, packet);
-                    break;
-                case PartyMode.Join:
-                    HandleJoin(session, packet);
-                    break;
-                case PartyMode.Leave:
-                    HandleLeave(session);
-                    break;
-                case PartyMode.Kick:
-                    HandleKick(session, packet);
-                    break;
-                case PartyMode.SetLeader:
-                    HandleSetLeader(session, packet);
-                    break;
-                case PartyMode.FinderJoin:
-                    HandleFinderJoin(session, packet);
-                    break;
-                case PartyMode.VoteKick:
-                    HandleVoteKick(session, packet);
-                    break;
-                case PartyMode.ReadyCheck:
-                    HandleStartReadyCheck(session);
-                    break;
-                case PartyMode.ReadyCheckUpdate:
-                    HandleReadyCheckUpdate(session, packet);
-                    break;
-                default:
-                    IPacketHandler<GameSession>.LogUnknownMode(mode);
-                    break;
-            }
-        }
-
-        private static void HandleInvite(GameSession session, PacketReader packet)
-        {
-            string target = packet.ReadUnicodeString();
-
-            Player other = GameServer.Storage.GetPlayerByName(target);
-            if (other == null)
-            {
+                session.Send(PartyPacket.Notice(session.Player, PartyNotice.NotLeader));
                 return;
             }
 
-            if (other.PartyId != 0)
+            if (other == session.Player)
             {
-                session.Send(ChatPacket.Send(session.Player, other.Session.Player.Name + " is already in a party.",
-                    ChatType.NoticeAlert2));
+                session.Send(PartyPacket.Notice(session.Player, PartyNotice.InviteSelf));
                 return;
             }
 
-            Party party = GameServer.PartyManager.GetPartyById(session.Player.PartyId);
-            if (party == null)
+            if (other.Party != null)
             {
-                session.Send(PartyPacket.Create(session.Player));
-            }
-            else if (party.Members.Count >= party.MaxMembers)
-            {
-                session.Send(ChatPacket.Send(session.Player, "Your party is full!", ChatType.NoticeAlert2));
-                return;
-            }
+                Party otherParty = other.Party;
 
-            other.Session.Send(PartyPacket.SendInvite(session.Player));
-        }
-
-        private static void HandleJoin(GameSession session, PacketReader packet)
-        {
-            string target = packet.ReadUnicodeString(); // Who invited the player
-            bool accept = packet.ReadBool(); // If the player accepted
-            packet.ReadInt(); // Something something I think it's dungeon not sure
-            JoinParty(session, target, accept);
-        }
-
-        private static void JoinParty(GameSession session, string leaderName, bool accept/*, int unknown*/)
-        {
-            Player partyLeader = GameServer.Storage.GetPlayerByName(leaderName);
-            if (partyLeader == null)
-            {
-                return;
-            }
-
-            GameSession leaderSession = partyLeader.Session;
-
-            if (!accept)
-            {
-                //Send Decline message to inviting player
-                leaderSession.Send(ChatPacket.Send(partyLeader, session.Player.Name + " declined the invitation.",
-                    ChatType.NoticeAlert2));
-                return;
-            }
-
-            Party party = GameServer.PartyManager.GetPartyByLeader(partyLeader);
-            if (party != null)
-            {
-                //Existing party, add joining player to all other party members.
-                party.BroadcastPacketParty(PartyPacket.Join(session.Player));
-                party.BroadcastPacketParty(PartyPacket.UpdatePlayer(session.Player));
-                party.BroadcastPacketParty(PartyPacket.UpdateHitpoints(session.Player));
-                party.AddMember(session.Player);
-
-                if (party.PartyFinderId != 0)
+                if (otherParty.Members.Count > 1)
                 {
-                    if (party.Members.Count >= party.MaxMembers)
-                    {
-                        party.PartyFinderId = 0; //Hide from party finder if full
-                        party.BroadcastPacketParty(MatchPartyPacket.RemoveListing(party));
-                        party.BroadcastPacketParty(
-                            MatchPartyPacket.SendListings(GameServer.PartyManager.GetPartyFinderList()));
-                        party.BroadcastPacketParty(PartyPacket.MatchParty(null));
-                    }
-                    else
-                    {
-                        session.Send(
-                            MatchPartyPacket.CreateListing(party)); //Add recruitment listing for newly joining player
-                        session.Send(PartyPacket.MatchParty(party));
-                    }
+                    session.Send(PartyPacket.Notice(session.Player, PartyNotice.UnableToInvite));
+                    return;
                 }
             }
-            else
+
+            other.Session.Send(PartyPacket.SendInvite(session.Player, party));
+        }
+        else
+        {
+            if (other.Party != null)
             {
-                //Create new party
-                Party newParty = new(10, new List<Player> { partyLeader, session.Player });
+                Party otherParty = other.Party;
+
+                if (otherParty.Members.Count == 1)
+                {
+                    Party newParty = new(session.Player);
+                    GameServer.PartyManager.AddParty(newParty);
+
+                    session.Send(PartyPacket.Create(newParty, true));
+                    other.Session.Send(PartyPacket.SendInvite(session.Player, newParty));
+                    return;
+                }
+
+                session.Send(PartyPacket.Notice(other, PartyNotice.RequestToJoin));
+                otherParty.Leader.Session.Send(PartyPacket.JoinRequest(session.Player));
+                return;
+            }
+
+            {
+                // create party
+                Party newParty = new(session.Player);
                 GameServer.PartyManager.AddParty(newParty);
-
-                //Send the party leader all the stuff for the joining player
-                leaderSession.Send(PartyPacket.Join(session.Player));
-                leaderSession.Send(PartyPacket.UpdatePlayer(session.Player));
-                leaderSession.Send(PartyPacket.UpdateHitpoints(session.Player));
-
-                leaderSession.Send(PartyPacket.UpdateHitpoints(partyLeader));
-
-                party = newParty;
+                session.Send(PartyPacket.Create(newParty, true));
+                other.Session.Send(PartyPacket.SendInvite(session.Player, newParty));
             }
+        }
+    }
 
-            //Create existing party based on the list of party members
-            session.Send(PartyPacket.CreateExisting(partyLeader, party.Members));
-            session.Send(PartyPacket.UpdatePlayer(session.Player));
-            foreach (Player partyMember in party.Members)
+    private static void HandleJoin(GameSession session, PacketReader packet)
+    {
+        string target = packet.ReadUnicodeString();
+        PartyNotice response = (PartyNotice) packet.ReadByte();
+        int partyId = packet.ReadInt();
+
+        JoinParty(session, response, partyId);
+    }
+
+    private static void JoinParty(GameSession session, PartyNotice response, int partyId)
+    {
+        Party party = GameServer.PartyManager.GetPartyById(partyId);
+        if (party == null)
+        {
+            session.Send(PartyPacket.Notice(session.Player, PartyNotice.PartyNotFound));
+            return;
+        }
+
+        if (party.Members.Contains(session.Player) || party.Leader == session.Player)
+        {
+            return;
+        }
+
+        if (response != PartyNotice.AcceptedInvite)
+        {
+            party.Leader.Session.Send(PartyPacket.Notice(session.Player, response));
+            return;
+        }
+
+        if (party.Members.Count >= 10)
+        {
+            session.Send(PartyPacket.Notice(session.Player, PartyNotice.FullParty));
+            return;
+        }
+
+        if (session.Player.Party != null)
+        {
+            Party currentParty = session.Player.Party;
+            if (currentParty.Members.Count == 1)
             {
-                //Skip first character because of the scuffed Create packet. For now this is a workaround and functions the same.
-                if (partyMember.CharacterId != party.Members.First().CharacterId)
-                {
-                    //Adds the party member to the UI
-                    session.Send(PartyPacket.Join(partyMember));
-                }
-
-                //Update the HP for each party member.
-                session.Send(PartyPacket.UpdateHitpoints(partyMember));
+                currentParty.RemoveMember(session.Player);
             }
         }
 
-        private static void HandleLeave(GameSession session)
+        if (party.Members.Count == 1)
         {
-            Party party = GameServer.PartyManager.GetPartyById(session.Player.PartyId);
-            session.Send(PartyPacket.Leave(session.Player, 1)); //1 = You're the player leaving
-            party?.RemoveMember(session.Player);
+            //establish party.
+            party.BroadcastPacketParty(PartyPacket.Join(session.Player));
+            party.AddMember(session.Player);
+            session.Send(PartyPacket.Create(party, true));
+            party.BroadcastPacketParty(PartyPacket.UpdateHitpoints(party.Leader));
+            party.BroadcastPacketParty(PartyPacket.UpdatePlayer(session.Player));
+            return;
         }
 
-        private static void HandleSetLeader(GameSession session, PacketReader packet)
+        party.BroadcastPacketParty(PartyPacket.Join(session.Player));
+        party.AddMember(session.Player);
+        session.Send(PartyPacket.Create(party, true));
+        party.BroadcastPacketParty(PartyPacket.UpdatePlayer(session.Player));
+
+        foreach (Player member in party.Members)
         {
-            string target = packet.ReadUnicodeString();
-
-            Player newLeader = GameServer.Storage.GetPlayerByName(target);
-            if (newLeader == null)
+            if (member != session.Player)
             {
-                return;
+                party.BroadcastPacketParty(PartyPacket.UpdateHitpoints(member));
             }
+        }
+    }
 
-            Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
-            if (party == null)
-            {
-                return;
-            }
+    private static void HandleLeave(GameSession session)
+    {
+        Party party = session.Player.Party;
 
-            party.BroadcastPacketParty(PartyPacket.SetLeader(newLeader));
-            party.Leader = newLeader;
-            party.Members.Remove(newLeader);
-            party.Members.Insert(0, newLeader);
+        session.Send(PartyPacket.Leave(session.Player, 1)); //1 = You're the player leaving
+        party?.RemoveMember(session.Player);
+
+        if (party != null)
+        {
+            party.BroadcastPacketParty(PartyPacket.Leave(session.Player, 0));
+        }
+    }
+
+    private static void HandleSetLeader(GameSession session, PacketReader packet)
+    {
+        string target = packet.ReadUnicodeString();
+
+        Player newLeader = GameServer.PlayerManager.GetPlayerByName(target);
+        if (newLeader == null)
+        {
+            return;
         }
 
-        private static void HandleFinderJoin(GameSession session, PacketReader packet)
+        Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
+        if (party == null)
         {
-            int partyId = packet.ReadInt();
-            string leaderName = packet.ReadUnicodeString();
-
-            Party party = GameServer.PartyManager.GetPartyById(partyId);
-            if (party == null || !party.Approval)
-            {
-                return;
-            }
-
-            if (session.Player.PartyId != 0)
-            {
-                //Disband old party
-                Party oldParty = GameServer.PartyManager.GetPartyById(session.Player.PartyId);
-                oldParty.PartyFinderId = 0;
-                oldParty.CheckDisband();
-            }
-
-            //Join party
-            JoinParty(session, leaderName, true);
+            return;
         }
 
-        private static void HandleKick(GameSession session, PacketReader packet)
+        party.BroadcastPacketParty(PartyPacket.SetLeader(newLeader));
+        party.Leader = newLeader;
+        party.Members.Remove(newLeader);
+        party.Members.Insert(0, newLeader);
+    }
+
+    private static void HandleFinderJoin(GameSession session, PacketReader packet)
+    {
+        int partyId = packet.ReadInt();
+        string leaderName = packet.ReadUnicodeString();
+
+        Party party = GameServer.PartyManager.GetPartyById(partyId);
+        if (party == null)
         {
-            long charId = packet.ReadLong();
-
-            Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
-            if (party == null)
-            {
-                return;
-            }
-
-            Player kickedPlayer = GameServer.Storage.GetPlayerById(charId);
-            if (kickedPlayer == null)
-            {
-                return;
-            }
-
-            party.BroadcastPacketParty(PartyPacket.Kick(kickedPlayer));
-            party.RemoveMember(kickedPlayer);
+            session.Send(PartyPacket.Notice(session.Player, PartyNotice.OutdatedRecruitmentListing));
+            return;
         }
 
-        private static void HandleVoteKick(GameSession session, PacketReader packet)
+        if (party.PartyFinderId == 0)
         {
-            long charId = packet.ReadLong();
-
-            Party party = GameServer.PartyManager.GetPartyById(session.Player.PartyId);
-            if (party == null)
-            {
-                return;
-            }
-
-            Player kickedPlayer = GameServer.Storage.GetPlayerById(charId);
-            if (kickedPlayer == null)
-            {
-                return;
-            }
-
-            party.BroadcastPacketParty(ChatPacket.Send(session.Player,
-                session.Player.Name + " voted to kick " + kickedPlayer.Name, ChatType.NoticeAlert3));
-            //TODO: Keep a counter of vote kicks for a player?
+            session.Send(PartyPacket.Notice(session.Player, PartyNotice.RecruitmentListingDeleted));
+            return;
         }
 
-        private static void HandleStartReadyCheck(GameSession session)
+        if (session.Player.Party == null)
         {
-            Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
-            if (party == null)
-            {
-                return;
-            }
-
-            party.BroadcastPacketParty(PartyPacket.StartReadyCheck(session.Player, party.Members, party.ReadyChecks++));
-            party.RemainingMembers = party.Members.Count - 1;
+            return;
         }
 
-        private static void HandleReadyCheckUpdate(GameSession session, PacketReader packet)
+        //Join party
+        JoinParty(session, PartyNotice.AcceptedInvite, partyId);
+    }
+
+    private static void HandleKick(GameSession session, PacketReader packet)
+    {
+        long charId = packet.ReadLong();
+
+        Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
+        if (party == null)
         {
-            int checkNum = packet.ReadInt() + 1; //+ 1 is because the ReadyChecks variable is always 1 ahead
-            byte accept = packet.ReadByte();
+            return;
+        }
 
-            Party party = GameServer.PartyManager.GetPartyById(session.Player.PartyId);
-            if (party == null)
-            {
-                return;
-            }
+        Player kickedPlayer = GameServer.PlayerManager.GetPlayerById(charId);
+        if (kickedPlayer == null)
+        {
+            return;
+        }
 
-            if (checkNum != party.ReadyChecks)
-            {
-                return;
-            }
+        party.BroadcastPacketParty(PartyPacket.Kick(kickedPlayer));
+        party.RemoveMember(kickedPlayer);
+    }
 
-            party.BroadcastPacketParty(PartyPacket.ReadyCheck(session.Player, accept));
-            party.RemainingMembers -= 1;
-            if (party.RemainingMembers == 0)
-            {
-                party.BroadcastPacketParty(PartyPacket.EndReadyCheck());
-            }
+    private static void HandleVoteKick(GameSession session, PacketReader packet)
+    {
+        long charId = packet.ReadLong();
+
+        Party party = session.Player.Party;
+        if (party == null)
+        {
+            return;
+        }
+
+        Player kickedPlayer = GameServer.PlayerManager.GetPlayerById(charId);
+        if (kickedPlayer == null)
+        {
+            return;
+        }
+
+        if (party.Members.Count < 4)
+        {
+            session.Send(PartyPacket.Notice(session.Player, PartyNotice.InsufficientMemberCountForKickVote));
+        }
+
+        //TODO: Keep a counter of vote kicks for a player?
+    }
+
+    public static void HandleSummonParty()
+    {
+        //TODO: implement Summon Party Button
+    }
+    private static void HandleStartReadyCheck(GameSession session)
+    {
+        Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
+        if (party == null)
+        {
+            return;
+        }
+
+        if (party.ReadyCheck.Count > 0) // a ready check is already in progress
+        {
+            return;
+        }
+
+        party.StartReadyCheck();
+    }
+
+    private static void HandleFindDungeonParty(GameSession session, PacketReader packet)
+    {
+        int dungeonId = packet.ReadInt();
+
+        if (session.Player.Party == null)
+        {
+            Party newParty = new(session.Player);
+            GameServer.PartyManager.AddParty(newParty);
+            session.Send(PartyPacket.Create(newParty, true));
+        }
+
+        Party party = session.Player.Party;
+
+        // TODO: Party pairing system
+
+        session.Send(PartyPacket.DungeonFindParty());
+    }
+
+    private static void CancelFindDungeonParty(GameSession session)
+    {
+        Party party = GameServer.PartyManager.GetPartyByLeader(session.Player);
+        if (party == null)
+        {
+            return;
+        }
+
+        if (party.Members.Count <= 1)
+        {
+            party.RemoveMember(session.Player);
+        }
+
+        // TODO: Remove party from pairing system
+
+        session.Send(PartyPacket.DungeonFindParty());
+    }
+
+    private static void HandleReadyCheckUpdate(GameSession session, PacketReader packet)
+    {
+        int checkNum = packet.ReadInt() + 1; //+ 1 is because the ReadyChecks variable is always 1 ahead
+        byte response = packet.ReadByte();
+
+        Party party = session.Player.Party;
+        if (party == null)
+        {
+            return;
+        }
+
+        party.BroadcastPacketParty(PartyPacket.ReadyCheck(session.Player, response));
+
+        party.ReadyCheck.Add(session.Player);
+        if (party.ReadyCheck.Count == party.Members.Count)
+        {
+            party.BroadcastPacketParty(PartyPacket.EndReadyCheck());
+            party.ReadyCheck.Clear();
         }
     }
 }

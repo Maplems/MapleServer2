@@ -3,40 +3,64 @@ using MapleServer2.Constants;
 using MapleServer2.Packets.Helpers;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class MountPacket
 {
-    public static class MountPacket
+    private enum Mode : byte
     {
-        public static Packet StartRide(IFieldObject<Player> player)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_RIDE);
-            pWriter.WriteByte(0x00);
-            pWriter.WriteInt(player.ObjectId);
-            pWriter.WriteMount(player.Value.Mount);
+        StartRide = 0x0,
+        StopRide = 0x1,
+        ChangeRide = 0x2,
+        StartTwoPersonRide = 0x3,
+        StopTwoPersonRide = 0x4
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter StartRide(IFieldObject<Player> player)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseRide);
+        pWriter.Write(Mode.StartRide);
+        pWriter.WriteInt(player.ObjectId);
+        pWriter.WriteMount(player.Value.Mount);
+        return pWriter;
+    }
 
-        public static Packet StopRide(IFieldObject<Player> player, bool forced = false)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_RIDE);
-            pWriter.WriteByte(0x01);
-            pWriter.WriteInt(player.ObjectId);
-            pWriter.WriteByte();
-            pWriter.WriteBool(forced);
+    public static PacketWriter StopRide(IFieldObject<Player> player, bool forced = false)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseRide);
+        pWriter.Write(Mode.StopRide);
+        pWriter.WriteInt(player.ObjectId);
+        pWriter.WriteByte();
+        pWriter.WriteBool(forced);
+        return pWriter;
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter ChangeRide(int playerObjectId, int mountId, long mountUid)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseRide);
+        pWriter.Write(Mode.ChangeRide);
+        pWriter.WriteInt(playerObjectId);
+        pWriter.WriteInt(mountId);
+        pWriter.WriteLong(mountUid);
+        return pWriter;
+    }
 
-        public static Packet ChangeRide(int playerObjectId, int mountId, long mountUid)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.RESPONSE_RIDE);
-            pWriter.WriteByte(0x02);
-            pWriter.WriteInt(playerObjectId);
-            pWriter.WriteInt(mountId);
-            pWriter.WriteLong(mountUid);
+    public static PacketWriter StartTwoPersonRide(int otherPlayerObjectId, int playerObjectId, byte index)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseRide);
+        pWriter.Write(Mode.StartTwoPersonRide);
+        pWriter.WriteInt(otherPlayerObjectId);
+        pWriter.WriteInt(playerObjectId);
+        pWriter.WriteByte(index);
+        return pWriter;
+    }
 
-            return pWriter;
-        }
+    public static PacketWriter StopTwoPersonRide(int otherPlayerObjectId, int playerObjectId)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.ResponseRide);
+        pWriter.Write(Mode.StopTwoPersonRide);
+        pWriter.WriteInt(otherPlayerObjectId);
+        pWriter.WriteInt(playerObjectId);
+        return pWriter;
     }
 }

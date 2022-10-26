@@ -1,32 +1,33 @@
-﻿using MaplePacketLib2.Tools;
+﻿using Maple2Storage.Types;
+using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Data.Static;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
-using Microsoft.Extensions.Logging;
+using MapleServer2.Types;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class VibrateHandler : GamePacketHandler<VibrateHandler>
 {
-    public class VibrateHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.Vibrate;
+
+    public override void Handle(GameSession session, PacketReader packet)
     {
-        public override RecvOp OpCode => RecvOp.VIBRATE;
+        string entityId = packet.ReadString();
+        long skillSN = packet.ReadLong();
+        int skillId = packet.ReadInt();
+        short skillLevel = packet.ReadShort();
+        short unkShort = packet.ReadShort();
+        int unkInt = packet.ReadInt();
+        CoordF playerCoords = packet.Read<CoordF>();
 
-        public VibrateHandler(ILogger<VibrateHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+        Player player = session.Player;
+        if (!MapEntityMetadataStorage.IsVibrateObject(player.MapId, entityId))
         {
-            string entityId = packet.ReadMapleString(); //Object hash
-            long someId = packet.ReadLong();
-            int objectId = packet.ReadInt(); //Object id??
-
-            int flag = packet.ReadInt();
-
-            int empty = packet.ReadInt(); //Empty
-
-            int unk1 = packet.ReadInt();
-            int unk2 = packet.ReadInt();
-            int unk3 = packet.ReadInt();
-
-            session.FieldManager.BroadcastPacket(VibratePacket.Vibrate(entityId, someId, objectId, flag, session.Player, session.ClientTick));
+            return;
         }
+
+        session.FieldManager.BroadcastPacket(VibratePacket.Vibrate(entityId, player.FieldPlayer.SkillCast));
     }
 }

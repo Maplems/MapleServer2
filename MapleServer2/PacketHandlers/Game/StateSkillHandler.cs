@@ -2,39 +2,35 @@
 using MapleServer2.Constants;
 using MapleServer2.Data.Static;
 using MapleServer2.Servers.Game;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class StateSkillHandler : GamePacketHandler<StateSkillHandler>
 {
-    public class StateSkillHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.StateSkill;
+
+    public override void Handle(GameSession session, PacketReader packet)
     {
-        public override RecvOp OpCode => RecvOp.STATE_SKILL;
-
-        public StateSkillHandler(ILogger<StateSkillHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+        byte function = packet.ReadByte();
+        if (function == 0)
         {
-            byte function = packet.ReadByte();
-            if (function == 0)
+            // This count seems to increase for each skill used
+            int counter = packet.ReadInt();
+            // objectId for climb, 13641 (0x3549 for swim dash)
+            int objectId = packet.ReadInt();
+            int clientTime = packet.ReadInt();
+            int skillId = packet.ReadInt();
+            packet.ReadShort(); // 1
+            session.Player.FieldPlayer.Animation = (byte) packet.ReadInt(); // Animation
+            int clientTick = packet.ReadInt();
+            packet.ReadLong(); // 0
+
+            if (SkillMetadataStorage.GetSkill(skillId).State == "gosGlide")
             {
-                // This count seems to increase for each skill used
-                int counter = packet.ReadInt();
-                // objectId for climb, 13641 (0x3549 for swim dash)
-                int objectId = packet.ReadInt();
-                int clientTime = packet.ReadInt();
-                int skillId = packet.ReadInt();
-                packet.ReadShort(); // 1
-                session.Player.Animation = (byte) packet.ReadInt(); // Animation
-                int clientTick = packet.ReadInt();
-                packet.ReadLong(); // 0
-
-                if (SkillMetadataStorage.GetSkill(skillId).State == "gosGlide")
-                {
-                    session.Player.OnAirMount = true;
-                }
-
-                // TODO: Broadcast this to all field players
+                session.Player.OnAirMount = true;
             }
+
+            // TODO: Broadcast this to all field players
         }
     }
 }

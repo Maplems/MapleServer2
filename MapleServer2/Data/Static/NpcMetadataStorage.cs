@@ -1,49 +1,29 @@
-﻿using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+﻿using Maple2Storage.Types;
 using Maple2Storage.Types.Metadata;
-using MapleServer2.Constants;
+using MapleServer2.Tools;
 using ProtoBuf;
 
-namespace MapleServer2.Data.Static
+namespace MapleServer2.Data.Static;
+
+public static class NpcMetadataStorage
 {
-    public static class NpcMetadataStorage
+    private static readonly Dictionary<int, NpcMetadata> Npcs = new();
+
+    public static void Init()
     {
-        private static readonly Dictionary<int, NpcMetadata> Npcs = new Dictionary<int, NpcMetadata>();
-
-        static NpcMetadataStorage()
+        using FileStream stream = MetadataHelper.GetFileStream(MetadataName.Npc);
+        List<NpcMetadata> npcList = Serializer.Deserialize<List<NpcMetadata>>(stream);
+        foreach (NpcMetadata npc in npcList)
         {
-            using FileStream stream = File.OpenRead($"{Paths.RESOURCES}/ms2-npc-metadata");
-            List<NpcMetadata> npcList = Serializer.Deserialize<List<NpcMetadata>>(stream);
-            foreach (NpcMetadata npc in npcList)
-            {
-                Npcs.Add(npc.Id, npc);
-            }
-        }
-
-        public static NpcMetadata GetNpc(int id)
-        {
-            return Npcs.GetValueOrDefault(id);
-        }
-
-        public static NpcMetadata GetNpcMetadata(int id)
-        {
-            NpcMetadata newNpc = Npcs.GetValueOrDefault(id);
-            if (newNpc != null)
-            {
-                if (newNpc.Friendly == 2)
-                {
-                    return Npcs.Select(x => x.Value).Where(x => x.Friendly == 2 && x.Id == id).FirstOrDefault();
-                }
-                else
-                {
-                    return Npcs.Select(x => x.Value).Where(x => x.Friendly == 0 && x.Id == id).FirstOrDefault();
-                }
-            }
-            else
-            {
-                return Npcs.GetValueOrDefault(11000010);
-            }
+            Npcs.Add(npc.Id, npc);
         }
     }
+
+    public static NpcMetadata? GetNpcMetadata(int id) => Npcs.GetValueOrDefault(id);
+
+    public static List<NpcMetadata> GetNpcsByMainTag(string mainTag) => Npcs.Values.Where(x => x.NpcMetadataBasic.MainTags.Contains(mainTag)).ToList();
+
+    public static List<NpcMetadata> GetNpcsBySubTag(string subTag) => Npcs.Values.Where(x => x.NpcMetadataBasic.MainTags.Contains(subTag)).ToList();
+
+    public static IEnumerable<NpcMetadata> GetAll() => Npcs.Values;
 }

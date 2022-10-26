@@ -1,58 +1,133 @@
 ﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Database;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class JobHandler : GamePacketHandler<JobHandler>
 {
-    public class JobHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.Job;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.JOB;
+        Close = 0x08,
+        Save = 0x09,
+        Reset = 0x0A,
+        Preset = 0x0B
+    }
 
-        public JobHandler(ILogger<JobHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode mode = (Mode) packet.ReadByte();
+        switch (mode)
         {
-            byte mode = packet.ReadByte();
-            switch (mode)
-            {
-                case 8: // Close Skill Tree
-                    HandleCloseSkillTree(session);
-                    break;
-                case 9: // Save Skill Tree
-                    HandleSaveSkillTree(session, packet);
-                    break;
-            }
+            case Mode.Close:
+                HandleCloseSkillTree(session);
+                break;
+            case Mode.Save:
+                HandleSaveSkillTree(session, packet);
+                break;
+            case Mode.Reset:
+                HandleResetSkillTree(session, packet);
+                break;
+            case Mode.Preset:
+                HandlePresetSkillTree(session, packet);
+                break;
+            default:
+                LogUnknownMode(mode);
+                break;
+        }
+    }
+
+    private static void HandleCloseSkillTree(GameSession session)
+    {
+        session.Send(JobPacket.Close(session.Player.FieldPlayer));
+    }
+
+    private static void HandleSaveSkillTree(GameSession session, PacketReader packet)
+    {
+        Player player = session.Player;
+        SkillTab skillTab = player.SkillTabs.FirstOrDefault(x => x.TabId == player.ActiveSkillTabId);
+        if (skillTab is null)
+        {
+            return;
         }
 
-        private static void HandleCloseSkillTree(GameSession session)
+        ReadSkills(packet, skillTab, out HashSet<int> newSkillIds);
+
+        player.RemoveSkillsFromHotbar();
+        player.AddNewSkillsToHotbar(newSkillIds);
+
+        session.Send(JobPacket.Save(player.FieldPlayer, newSkillIds));
+        DatabaseManager.SkillTabs.Update(skillTab);
+
+        session.Send(KeyTablePacket.SendHotbars(player.GameOptions));
+        DatabaseManager.GameOptions.Update(player.GameOptions);
+    }
+
+    private static void HandleResetSkillTree(GameSession session, PacketReader packet)
+    {
+        int unknown = packet.ReadInt();
+
+        Player player = session.Player;
+        SkillTab skillTab = player.SkillTabs.FirstOrDefault(x => x.TabId == player.ActiveSkillTabId);
+        if (skillTab is null)
         {
-            session.Send(JobPacket.Close());
+            return;
         }
 
-        private static void HandleSaveSkillTree(GameSession session, PacketReader packet)
+        skillTab.ResetSkillTree(player.JobCode, player.SubJobCode);
+        player.RemoveSkillsFromHotbar();
+
+        session.Send(JobPacket.Save(player.FieldPlayer));
+        DatabaseManager.SkillTabs.Update(skillTab);
+
+        session.Send(KeyTablePacket.SendHotbars(player.GameOptions));
+        DatabaseManager.GameOptions.Update(player.GameOptions);
+    }
+
+    private static void HandlePresetSkillTree(GameSession session, PacketReader packet)
+    {
+        Player player = session.Player;
+        SkillTab skillTab = player.SkillTabs.FirstOrDefault(x => x.TabId == player.ActiveSkillTabId);
+        if (skillTab is null)
         {
-            // Get skill tab to update
-            SkillTab skillTab = session.Player.SkillTabs[0]; // Get first skill tab only for now, uncertain of how to have multiple skill tabs
+            return;
+        }
 
-            // Read skills
-            int count = packet.ReadInt(); // Number of skills
-            for (int i = 0; i < count; i++)
+        skillTab.ResetSkillTree(player.JobCode, player.SubJobCode);
+
+        ReadSkills(packet, skillTab, out HashSet<int> newSkillIds);
+
+        player.RemoveSkillsFromHotbar();
+        player.AddNewSkillsToHotbar(newSkillIds);
+
+        session.Send(JobPacket.Save(player.FieldPlayer, newSkillIds));
+        DatabaseManager.SkillTabs.Update(skillTab);
+
+        session.Send(KeyTablePacket.SendHotbars(player.GameOptions));
+        DatabaseManager.GameOptions.Update(player.GameOptions);
+    }
+
+    private static void ReadSkills(PacketReader packet, SkillTab skillTab, out HashSet<int> newSkillIds)
+    {
+        newSkillIds = new();
+        int skillCount = packet.ReadInt();
+        for (int i = 0; i < skillCount; i++)
+        {
+            int skillId = packet.ReadInt();
+            short skillLevel = packet.ReadShort();
+            bool learned = packet.ReadBool();
+
+            if (skillTab.SkillLevels[skillId] == 0 && learned)
             {
-                // Read skill info
-                int id = packet.ReadInt(); // Skill id
-                short level = packet.ReadShort(); // Skill level
-                byte learned = packet.ReadByte(); // 00 if unlearned 01 if learned
-
-                // Update current character skill tree data with new skill
-                skillTab.AddOrUpdate(id, level, learned);
+                newSkillIds.Add(skillId);
             }
 
-            // Send JOB packet that contains all skills then send KEY_TABLE packet to update hotbars
-            session.Send(JobPacket.Save(session.Player, session.FieldPlayer.ObjectId));
-            session.Send(KeyTablePacket.SendHotbars(session.Player.GameOptions));
+            skillTab.AddOrUpdate(skillId, skillLevel, learned);
         }
     }
 }

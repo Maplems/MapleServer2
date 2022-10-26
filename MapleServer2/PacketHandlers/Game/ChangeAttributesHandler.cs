@@ -1,82 +1,217 @@
-﻿using System;
-using Maple2Storage.Enums;
+﻿using Maple2Storage.Enums;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Data.Static;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
+using MapleServer2.Tools;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
+using MoonSharp.Interpreter;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class ChangeAttributesHandler : GamePacketHandler<ChangeAttributesHandler>
 {
-    public class ChangeAttributesHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.ChangeAttribute;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.CHANGE_ATTRIBUTES;
+        ChangeAttributes = 0,
+        SelectNewAttributes = 2
+    }
 
-        private const string NEW_ITEM_KEY = "new_item_key";
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode function = (Mode) packet.ReadByte();
 
-        public ChangeAttributesHandler(ILogger<GamePacketHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+        switch (function)
         {
-            byte function = packet.ReadByte();
+            case Mode.ChangeAttributes:
+                HandleChangeAttributes(session, packet);
+                break;
+            case Mode.SelectNewAttributes:
+                HandleSelectNewAttributes(session, packet);
+                break;
+            default:
+                LogUnknownMode(function);
+                break;
+        }
+    }
 
-            switch (function)
+    private static void HandleChangeAttributes(GameSession session, PacketReader packet)
+    {
+        short lockStatId = -1;
+        bool isSpecialStat = false;
+        long itemUid = packet.ReadLong();
+        packet.Skip(8);
+        bool useLock = packet.ReadBool();
+        if (useLock)
+        {
+            isSpecialStat = packet.ReadBool();
+            lockStatId = packet.ReadShort();
+
+            if (isSpecialStat)
             {
-                case 0:
-                    HandleChangeAttributes(session, packet);
-                    break;
-                case 2:
-                    HandleSelectNewAttributes(session, packet);
-                    break;
+                // Match the enum ID for ItemAttribute
+                lockStatId += 11000;
             }
         }
 
-        private static void HandleChangeAttributes(GameSession session, PacketReader packet)
+        IInventory inventory = session.Player.Inventory;
+        Item gear = inventory.GetFromInventoryOrEquipped(itemUid);
+        if (gear is null)
         {
-            short lockIndex = -1;
-            long itemUid = packet.ReadLong();
-            packet.Skip(8);
-            bool useLock = packet.ReadBool();
-            if (useLock)
-            {
-                packet.Skip(1);
-                lockIndex = packet.ReadShort();
-            }
+            return;
+        }
 
-            if (session.Player.Inventory.Items.TryGetValue(itemUid, out Item item))
-            {
-                item.TimesAttributesChanged++;
-                Item newItem = new Item(item);
-                int attributeCount = newItem.Stats.BonusAttributes.Count;
-                Random rng = new Random();
-                for (int i = 0; i < attributeCount; i++)
-                {
-                    if (i == lockIndex)
-                        continue;
-                    // TODO: Don't RNG the same attribute twice
-                    newItem.Stats.BonusAttributes[i] = ItemStat.Of((ItemAttribute) rng.Next(35), 0.01f);
-                }
+        Script script = ScriptLoader.GetScript("Functions/calcGetItemRemakeIngredient");
+        DynValue scriptResults = script.RunFunction("calcGetItemRemakeIngredientNew", (int) gear.Type, gear.TimesAttributesChanged, gear.Rarity, gear.Level);
 
-                session.StateStorage[NEW_ITEM_KEY] = newItem;
-                session.Send(ChangeAttributesPacket.PreviewNewItem(newItem));
+        IReadOnlyCollection<Item> ingredient1 = inventory.GetAllByTag(scriptResults.Tuple[0].String);
+        int ingredient1Cost = (int) scriptResults.Tuple[1].Number;
+        IReadOnlyCollection<Item> ingredient2 = inventory.GetAllByTag(scriptResults.Tuple[2].String);
+        int ingredient2Cost = (int) scriptResults.Tuple[3].Number;
+        IReadOnlyCollection<Item> ingredient3 = inventory.GetAllByTag(scriptResults.Tuple[4].String);
+        int ingredient3Cost = (int) scriptResults.Tuple[5].Number;
+
+        int ingredient1TotalAmount = ingredient1.Sum(x => x.Amount);
+        int ingredient2TotalAmount = ingredient2.Sum(x => x.Amount);
+        int ingredient3TotalAmount = ingredient3.Sum(x => x.Amount);
+
+        // Check if player has enough materials
+        if (ingredient1TotalAmount < ingredient1Cost || ingredient2TotalAmount < ingredient2Cost || ingredient3TotalAmount < ingredient3Cost)
+        {
+            return;
+        }
+
+        Item scrollLock = null;
+
+        List<ItemSlot> itemSlots = ItemMetadataStorage.GetItemSlots(gear.Id);
+        string tag = "";
+        if (Item.IsAccessory(itemSlots))
+        {
+            tag = "LockItemOptionAccessory";
+        }
+        else if (Item.IsArmor(itemSlots))
+        {
+            tag = "LockItemOptionArmor";
+        }
+        else if (Item.IsWeapon(itemSlots))
+        {
+            tag = "LockItemOptionWeapon";
+        }
+        else if (gear.IsPet())
+        {
+            tag = "LockItemOptionPet";
+        }
+
+        if (useLock)
+        {
+            scrollLock = inventory.GetAllByTag(tag)
+                .FirstOrDefault(i => i.Rarity == gear.Rarity);
+            // Check if scroll lock exist in inventory
+            if (scrollLock == null)
+            {
+                return;
             }
         }
 
-        private static void HandleSelectNewAttributes(GameSession session, PacketReader packet)
+        gear.TimesAttributesChanged++;
+
+        Item newItem = new(gear);
+
+        // Get random stats except stat that is locked
+        List<ItemStat> randomList = RandomStats.RollBonusStatsWithStatLocked(newItem, lockStatId, isSpecialStat);
+
+        Dictionary<StatAttribute, ItemStat> newRandoms = new();
+        for (int i = 0; i < newItem.Stats.Randoms.Count; i++)
         {
-            long itemUid = packet.ReadLong();
-
-            if (session.StateStorage.TryGetValue(NEW_ITEM_KEY, out object obj))
+            ItemStat stat = newItem.Stats.Randoms.ElementAt(i).Value;
+            // Check if BonusStats[i] is BasicStat and isSpecialStat is false
+            // Check if BonusStats[i] is SpecialStat and isSpecialStat is true
+            switch (stat)
             {
-                if (obj is not Item item || itemUid != item.Uid)
-                {
-                    return;
-                }
-
-                session.Player.Inventory.Replace(item);
-                session.Send(ChangeAttributesPacket.SelectNewItem(item));
+                case BasicStat when !isSpecialStat:
+                case SpecialStat when isSpecialStat:
+                    switch (stat)
+                    {
+                        case SpecialStat ns when ns.ItemAttribute == (StatAttribute) lockStatId:
+                        case SpecialStat ss when ss.ItemAttribute == (StatAttribute) lockStatId:
+                            newRandoms[stat.ItemAttribute] = stat;
+                            continue;
+                    }
+                    break;
             }
+
+            newRandoms[randomList[i].ItemAttribute] = randomList[i];
+        }
+        newItem.Stats.Randoms = newRandoms;
+
+        // Consume materials from inventory
+        ConsumeMaterials(session, ingredient1Cost, ingredient2Cost, ingredient3Cost, ingredient1, ingredient2, ingredient3);
+
+        if (useLock)
+        {
+            session.Player.Inventory.ConsumeItem(session, scrollLock.Uid, 1);
+        }
+        inventory.TemporaryStorage[newItem.Uid] = newItem;
+
+        session.Send(ChangeAttributesPacket.PreviewNewItem(newItem));
+    }
+
+    private static void HandleSelectNewAttributes(GameSession session, PacketReader packet)
+    {
+        long itemUid = packet.ReadLong();
+
+        IInventory inventory = session.Player.Inventory;
+        Item gear = inventory.TemporaryStorage.FirstOrDefault(x => x.Key == itemUid).Value;
+        if (gear == null)
+        {
+            return;
+        }
+
+        inventory.TemporaryStorage.Remove(itemUid);
+        inventory.Replace(gear);
+        session.Send(ChangeAttributesPacket.AddNewItem(gear));
+    }
+
+    private static void ConsumeMaterials(GameSession session, int ingredient1Cost, int ingredient2Cost, int ingredient3Cost, IEnumerable<Item> ingredient1, IEnumerable<Item> ingredient2, IEnumerable<Item> ingredient3)
+    {
+        IInventory inventory = session.Player.Inventory;
+        foreach (Item item in ingredient1)
+        {
+            if (item.Amount >= ingredient1Cost)
+            {
+                inventory.ConsumeItem(session, item.Uid, ingredient1Cost);
+                break;
+            }
+
+            ingredient1Cost -= item.Amount;
+            inventory.ConsumeItem(session, item.Uid, item.Amount);
+        }
+
+        foreach (Item item in ingredient2)
+        {
+            if (item.Amount >= ingredient2Cost)
+            {
+                inventory.ConsumeItem(session, item.Uid, ingredient2Cost);
+                break;
+            }
+
+            ingredient2Cost -= item.Amount;
+            inventory.ConsumeItem(session, item.Uid, item.Amount);
+        }
+
+        foreach (Item item in ingredient3)
+        {
+            if (item.Amount >= ingredient3Cost)
+            {
+                inventory.ConsumeItem(session, item.Uid, ingredient3Cost);
+                break;
+            }
+
+            ingredient3Cost -= item.Amount;
+            inventory.ConsumeItem(session, item.Uid, item.Amount);
         }
     }
 }

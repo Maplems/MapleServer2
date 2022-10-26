@@ -1,21 +1,43 @@
 ﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class BreakablePacket
 {
-    public static class BreakablePacket
+    private enum Mode : byte
     {
-        public static Packet Break(string objectHash, byte flag)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.BREAKABLE);
-            pWriter.WriteByte(1);
-            pWriter.WriteMapleString(objectHash);
-            pWriter.WriteByte(flag);
-            pWriter.WriteInt();
-            pWriter.WriteInt(); //Unk, trigger id maybe
-            pWriter.WriteByte();
+        LoadBreakables = 0x0,
+        Interact = 0x1
+    }
 
-            return pWriter;
+    public static PacketWriter LoadBreakables(List<BreakableObject> breakables)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Breakable);
+        pWriter.Write(Mode.LoadBreakables);
+        pWriter.WriteInt(breakables.Count);
+        foreach (BreakableObject breakable in breakables)
+        {
+            WriteBreakable(pWriter, breakable);
         }
+        return pWriter;
+    }
+
+    public static PacketWriter Interact(BreakableObject breakable)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Breakable);
+        pWriter.Write(Mode.Interact);
+        WriteBreakable(pWriter, breakable);
+        return pWriter;
+    }
+
+    private static void WriteBreakable(PacketWriter pWriter, BreakableObject breakable)
+    {
+        pWriter.WriteString(breakable.Id);
+        pWriter.Write(breakable.State);
+        pWriter.WriteBool(breakable.IsEnabled);
+        pWriter.WriteInt();
+        pWriter.WriteInt(); // looks to be some server tick stamp?
     }
 }

@@ -1,262 +1,319 @@
-﻿using System.Collections.Generic;
-using Maple2Storage.Types;
+﻿using Maple2Storage.Enums;
 using MaplePacketLib2.Tools;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets.Helpers
+namespace MapleServer2.Packets.Helpers;
+
+public static class ItemPacketHelper
 {
-    public static class ItemPacketHelper
+    public static PacketWriter WriteItem(this PacketWriter pWriter, Item item)
     {
-        public static PacketWriter WriteItem(this PacketWriter pWriter, Item item)
+        pWriter.WriteInt(item.Amount);
+        pWriter.WriteInt();
+        pWriter.WriteInt(-1);
+        pWriter.WriteLong(item.CreationTime);
+        pWriter.WriteLong(item.ExpiryTime);
+        pWriter.WriteLong();
+        pWriter.WriteInt(item.TimesAttributesChanged);
+        pWriter.WriteInt(item.PlayCount);
+        pWriter.WriteBool(item.IsLocked);
+        pWriter.WriteLong(item.UnlockTime);
+        pWriter.WriteShort(item.RemainingGlamorForges);
+        pWriter.WriteByte();
+        pWriter.WriteInt(item.GachaDismantleId);
+
+        // Write Appearance 
+        pWriter.WriteAppearance(item);
+
+        // Write Stats 0x0582B10
+        pWriter.WriteStats(item.Stats);
+        pWriter.WriteInt(item.EnchantLevel);
+        pWriter.WriteInt(item.EnchantExp);
+        pWriter.WriteBool(true); // Enchant based peachy charges, otherwise always require 10 charges
+        pWriter.WriteLong();
+        pWriter.WriteInt();
+        pWriter.WriteInt();
+        pWriter.WriteBool(item.TransferFlag.HasFlag(ItemTransferFlag.Tradeable) || item.RemainingTrades > 0 || item.RemainingRepackageCount > 0);
+        pWriter.WriteInt(item.Charges);
+        pWriter.WriteEnchantStats(item);
+
+        if (item.IsCustomScore)
         {
-            pWriter.WriteInt(item.Amount);
-            pWriter.WriteInt();
-            pWriter.WriteInt(-1);
-            pWriter.WriteLong(item.CreationTime);
-            pWriter.WriteLong(item.ExpiryTime);
-            pWriter.WriteLong();
-            pWriter.WriteInt(item.TimesAttributesChanged);
-            pWriter.WriteInt(item.PlayCount);
-            pWriter.WriteBool(item.IsLocked);
-            pWriter.WriteLong(item.UnlockTime);
-            pWriter.WriteShort(item.RemainingGlamorForges);
-            pWriter.WriteByte();
-            pWriter.WriteInt();
-
-            // Write Appearance 
-            pWriter.WriteAppearance(item);
-
-            // Write Stats 0x0582B10
-            pWriter.WriteStats(item.Stats);
-            pWriter.WriteInt(item.Enchants);
-            pWriter.WriteInt(item.EnchantExp);
-            pWriter.WriteBool(true); // Enchant based peachy charges, otherwise always require 10 charges
-            pWriter.WriteLong();
-            pWriter.WriteInt();
-            pWriter.WriteInt();
-            pWriter.WriteBool(item.CanRepackage);
-            pWriter.WriteInt(item.Charges);
-            pWriter.WriteStatDiff(/*item.Stats, item.Stats*/);
-
-            if (item.IsTemplate)
-            {
-                // Not implemented, causes issues for non-default character creation outfits
-                pWriter.WriteTemplate();
-            }
-
-            if (item.InventoryTab == InventoryTab.Pets)
-            {
-                pWriter.WritePet();
-            }
-
-            if (item.GemSlot != 0)
-            {
-                // Now deviate from WriteItem
-                pWriter.WriteBool(true);
-                pWriter.WriteByte((byte) item.GemSlot);
-                pWriter.WriteUnicodeString(item.Id.ToString());
-            }
-
-            // Item Transfer Data 0x058AD00
-            pWriter.WriteInt((int) item.TransferFlag);
-            pWriter.WriteByte();
-            pWriter.WriteInt();
-            pWriter.WriteInt();
-            pWriter.WriteByte();
-            pWriter.WriteByte(); // 2nd flag, use to skip charbound
-
-            // CharBound means untradable, unsellable, bound to char (ignores TransferFlag, but not 2nd flag!!)
-            bool isCharBound = item.Owner != null;
-            pWriter.WriteBool(isCharBound);
-            if (isCharBound)
-            {
-                pWriter.WriteLong(item.Owner.CharacterId);
-                pWriter.WriteUnicodeString(item.Owner.Name);
-            }
-
-            pWriter.WriteSockets(item.Stats);
-
-            pWriter.WriteLong(item.PairedCharacterId);
-            if (item.PairedCharacterId != 0)
-            {
-                pWriter.WriteUnicodeString(item.PairedCharacterName);
-                pWriter.WriteBool(false);
-            }
-
-            // Unknwon | BoundCharacter?
-            pWriter.WriteLong();
-            pWriter.WriteUnicodeString("");
-
-            return pWriter;
+            pWriter.WriteMusicScore(item);
         }
 
-        private static PacketWriter WriteAppearance(this PacketWriter pWriter, Item item)
+        if (item.Ugc != null)
         {
-            pWriter.Write<EquipColor>(item.Color);
-            pWriter.WriteInt(item.AppearanceFlag);
-            // Positioning Data
-            switch (item.ItemSlot)
+            pWriter.WriteTemplate(item.Ugc);
+        }
+
+        if (item.InventoryTab is InventoryTab.Pets)
+        {
+            pWriter.WriteClass(item.PetInfo);
+        }
+
+        if (item.GemSlot != 0)
+        {
+            // Now deviate from WriteItem
+            pWriter.WriteBool(true);
+            pWriter.WriteByte((byte) item.GemSlot);
+            pWriter.WriteUnicodeString(item.Id.ToString());
+            switch (item.GemSlot)
             {
-                case ItemSlot.CP:
-                    for (int i = 0; i < 13; i++)
-                    {
-                        pWriter.Write(0);
-                    }
+                case GemSlot.PET:
+                    pWriter.WriteInt(item.PetSkinBadgeId);
                     break;
-                case ItemSlot.HR:
-                    //pWriter.Write<HairData>(item.HairD);
-                    pWriter.Write(item.HairD.BackLength);
-                    pWriter.Write(item.HairD.BackPositionArray);
-                    pWriter.Write(item.HairD.FrontLength);
-                    pWriter.Write(item.HairD.FrontPositionArray);
-                    break;
-                case ItemSlot.FD:
-                    pWriter.Write(item.FaceDecorationD);
+                case GemSlot.TRANS:
+                    pWriter.WriteBytes(item.TransparencyBadgeBools);
                     break;
             }
+        }
+
+        // Item Transfer Data 0x058AD00
+        pWriter.WriteInt((int) item.TransferFlag);
+        pWriter.WriteByte();
+        pWriter.WriteInt(item.RemainingTrades);
+        pWriter.WriteInt(1 - item.RemainingRepackageCount);
+        pWriter.WriteByte();
+        pWriter.WriteByte(); // 2nd flag, use to skip charbound
+
+        // CharBound means untradable, unsellable, bound to char (ignores TransferFlag, but not 2nd flag!!)
+        bool isCharBound = item.OwnerCharacterId != 0;
+        pWriter.WriteBool(isCharBound);
+        if (isCharBound)
+        {
+            pWriter.WriteLong(item.OwnerCharacterId);
+            pWriter.WriteUnicodeString(item.OwnerCharacterName);
+        }
+
+        pWriter.WriteSockets(item.Stats, item.GemSockets.Sockets);
+
+        pWriter.WriteLong(item.PairedCharacterId);
+        if (item.PairedCharacterId != 0)
+        {
+            pWriter.WriteUnicodeString(item.PairedCharacterName);
+            pWriter.WriteBool(false);
+        }
+
+        // Unknwon | BoundCharacter?
+        pWriter.WriteLong();
+        pWriter.WriteUnicodeString();
+
+        return pWriter;
+    }
+
+    private static PacketWriter WriteAppearance(this PacketWriter pWriter, Item item)
+    {
+        pWriter.Write(item.Color);
+        // Positioning Data
+        switch (item.ItemSlot)
+        {
+            case ItemSlot.CP:
+                pWriter.Write(item.HatData);
+                break;
+            case ItemSlot.HR:
+                pWriter.Write(item.HairData.BackLength);
+                pWriter.Write(item.HairData.BackPositionCoord);
+                pWriter.Write(item.HairData.BackPositionRotation);
+                pWriter.Write(item.HairData.FrontLength);
+                pWriter.Write(item.HairData.FrontPositionCoord);
+                pWriter.Write(item.HairData.FrontPositionRotation);
+                break;
+            case ItemSlot.FD:
+                pWriter.WriteBytes(item.FaceDecorationData);
+                break;
+        }
+
+        return pWriter;
+    }
+
+    // 9 Blocks of stats, still missing some stats
+    private static PacketWriter WriteStats(this PacketWriter pWriter, ItemStats stats)
+    {
+        pWriter.WriteByte(); // Not part of appearance sub!
+        List<BasicStat> basicConstantNormalStats = stats.Constants.Values.OfType<BasicStat>().ToList();
+        pWriter.WriteShort((short) basicConstantNormalStats.Count);
+        foreach (BasicStat stat in basicConstantNormalStats)
+        {
+            WriteBasicStat(pWriter, stat);
+        }
+
+        List<SpecialStat> basicConstantSpecialStats = stats.Constants.Values.OfType<SpecialStat>().ToList();
+        pWriter.WriteShort((short) basicConstantSpecialStats.Count);
+        foreach (SpecialStat stat in basicConstantSpecialStats)
+        {
+            WriteSpecialStat(pWriter, stat);
+        }
+        pWriter.WriteInt();
+
+        List<BasicStat> staticNormalStats = stats.Statics.Values.OfType<BasicStat>().ToList();
+        pWriter.WriteShort((short) staticNormalStats.Count);
+        foreach (BasicStat stat in staticNormalStats)
+        {
+            WriteBasicStat(pWriter, stat);
+        }
+
+        List<SpecialStat> staticSpecialStats = stats.Statics.Values.OfType<SpecialStat>().ToList();
+        pWriter.WriteShort((short) staticSpecialStats.Count);
+        foreach (SpecialStat stat in staticSpecialStats)
+        {
+            WriteSpecialStat(pWriter, stat);
+        }
+
+        pWriter.WriteInt();
+
+        List<BasicStat> bonusNormalStats = stats.Randoms.Values.OfType<BasicStat>().ToList();
+        pWriter.WriteShort((short) bonusNormalStats.Count);
+        foreach (BasicStat stat in bonusNormalStats)
+        {
+            WriteBasicStat(pWriter, stat);
+        }
+
+        List<SpecialStat> bonusSpecialStats = stats.Randoms.Values.OfType<SpecialStat>().ToList();
+        pWriter.WriteShort((short) bonusSpecialStats.Count);
+        foreach (SpecialStat stat in bonusSpecialStats)
+        {
+            WriteSpecialStat(pWriter, stat);
+        }
+        pWriter.WriteInt();
+
+        pWriter.WriteShort(); // Title Attributes
+        pWriter.WriteShort();
+        pWriter.WriteInt();
+        pWriter.WriteShort(); // Empowerment Attributes
+        pWriter.WriteShort();
+        pWriter.WriteInt();
+        pWriter.WriteShort(); // Empowerment Attributes
+        pWriter.WriteShort();
+        pWriter.WriteInt();
+        pWriter.WriteShort(); // Empowerment Attributes
+        pWriter.WriteShort();
+        pWriter.WriteInt();
+        pWriter.WriteShort(); // Empowerment Attributes
+        pWriter.WriteShort();
+        pWriter.WriteInt();
+        pWriter.WriteShort(); // Empowerment Attributes
+        pWriter.WriteShort();
+        pWriter.WriteInt();
+
+        return pWriter;
+    }
+
+    private static void WriteBasicStat(PacketWriter pWriter, BasicStat stat)
+    {
+        pWriter.WriteShort(stat.WriteAttribute());
+        pWriter.WriteInt(stat.Flat);
+        pWriter.WriteFloat(stat.Rate);
+    }
+
+    private static void WriteSpecialStat(PacketWriter pWriter, SpecialStat stat)
+    {
+        pWriter.WriteShort(stat.WriteAttribute());
+        pWriter.WriteFloat(stat.Rate);
+        pWriter.WriteFloat(stat.Flat);
+    }
+
+    private static PacketWriter WriteEnchantStats(this PacketWriter pWriter, Item item)
+    {
+        ItemStats stats = item.Stats;
+        List<BasicStat> enchantStats = stats.Enchants.Values.OfType<BasicStat>().ToList();
+        pWriter.WriteByte((byte) enchantStats.Count);
+        foreach (BasicStat stat in enchantStats)
+        {
+            pWriter.WriteInt((int) stat.ItemAttribute);
+            pWriter.WriteInt(stat.Flat);
+            pWriter.WriteFloat(stat.Rate);
+        }
+
+        pWriter.WriteInt(item.LimitBreakLevel);
+
+        List<BasicStat> basicLimitBreakStats = stats.LimitBreakEnchants.Values.OfType<BasicStat>().ToList();
+        pWriter.WriteInt(basicLimitBreakStats.Count);
+        foreach (BasicStat stat in basicLimitBreakStats)
+        {
+            WriteBasicStat(pWriter, stat);
+        }
+
+        List<SpecialStat> specialLimitBreakStats = stats.LimitBreakEnchants.Values.OfType<SpecialStat>().ToList();
+        pWriter.WriteInt(specialLimitBreakStats.Count);
+        foreach (SpecialStat stat in specialLimitBreakStats)
+        {
+            WriteSpecialStat(pWriter, stat);
+        }
+
+        return pWriter;
+    }
+
+    // Writes UGC template data
+    private static void WriteTemplate(this PacketWriter pWriter, UGC ugc)
+    {
+        pWriter.WriteClass(ugc);
+        pWriter.WriteLong();
+        pWriter.WriteInt();
+        pWriter.WriteInt();
+        pWriter.WriteInt();
+        pWriter.WriteLong();
+        pWriter.WriteInt();
+        pWriter.WriteLong();
+        pWriter.WriteLong();
+        pWriter.WriteUnicodeString();
+    }
+
+    public static PacketWriter WriteSockets(this PacketWriter pWriter, ItemStats stats, List<GemSocket> sockets)
+    {
+        if (sockets == null)
+        {
+            pWriter.WriteByte(0); // 0 sockets
+            pWriter.WriteByte(0); // 0 unlocked sockets
 
             return pWriter;
         }
 
-        // 9 Blocks of stats, Only handling Basic and Bonus attributes for now
-        private static PacketWriter WriteStats(this PacketWriter pWriter, ItemStats stats)
+        pWriter.WriteByte((byte) sockets.Count);
+        int unlockedCount = 0;
+        for (int i = 0; i < sockets.Count; i++)
         {
-            pWriter.WriteByte(); // Not part of appearance sub!
-            List<ItemStat> basicAttributes = stats.BasicAttributes;
-            pWriter.WriteShort((short) basicAttributes.Count);
-            foreach (ItemStat stat in basicAttributes)
+            if (sockets[i].IsUnlocked)
             {
-                pWriter.Write(stat);
+                unlockedCount++;
             }
-            pWriter.WriteShort(); // SpecialAttributes
-            pWriter.WriteInt();
-
-            // Another basic attributes block
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-
-            List<ItemStat> bonusAttributes = stats.BonusAttributes;
-            pWriter.WriteShort((short) bonusAttributes.Count);
-            foreach (ItemStat stat in bonusAttributes)
-            {
-                pWriter.Write(stat);
-            }
-            pWriter.WriteShort();
-            pWriter.WriteInt(); // SpecialAttributes
-
-
-            // Ignore other attributes
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-            pWriter.WriteShort();
-            pWriter.WriteShort();
-            pWriter.WriteInt();
-
-            return pWriter;
         }
-
-        private static PacketWriter WriteStatDiff(this PacketWriter pWriter/*, ItemStats old, ItemStats new*/)
+        pWriter.WriteByte((byte) unlockedCount);
+        for (int i = 0; i < unlockedCount; i++)
         {
-            // TODO: Find stat diffs (low priority)
-            List<ItemStat> generalStatDiff = new List<ItemStat>();
-            pWriter.WriteByte((byte) generalStatDiff.Count);
-            foreach (ItemStat stat in generalStatDiff)
+            pWriter.WriteBool(sockets[i].Gemstone != null);
+            if (sockets[i].Gemstone != null)
             {
-                pWriter.Write(stat);
-            }
-
-            pWriter.WriteInt(); // ???
-
-            List<ItemStat> statDiff = new List<ItemStat>();
-            pWriter.WriteInt(statDiff.Count);
-            foreach (ItemStat stat in statDiff)
-            {
-                pWriter.Write(stat);
-            }
-
-            List<SpecialItemStat> bonusStatDiff = new List<SpecialItemStat>();
-            pWriter.WriteInt(bonusStatDiff.Count);
-            foreach (SpecialItemStat stat in bonusStatDiff)
-            {
-                pWriter.Write(stat);
-            }
-
-            return pWriter;
-        }
-
-        // Writes UGC template data
-        private static PacketWriter WriteTemplate(this PacketWriter pWriter)
-        {
-            pWriter.WriteUgc();
-            pWriter.WriteLong();
-            pWriter.WriteInt();
-            pWriter.WriteInt();
-            pWriter.WriteInt();
-            pWriter.WriteLong();
-            pWriter.WriteInt();
-            pWriter.WriteLong();
-            pWriter.WriteLong();
-            pWriter.WriteUnicodeString("");
-
-            return pWriter;
-        }
-
-        private static PacketWriter WritePet(this PacketWriter pWriter)
-        {
-            pWriter.WriteUnicodeString(""); // Name
-            pWriter.WriteLong(); // Exp
-            pWriter.WriteInt();
-            pWriter.WriteInt(1);// Level
-            pWriter.WriteByte();
-
-            return pWriter;
-        }
-
-        private static PacketWriter WriteSockets(this PacketWriter pWriter, ItemStats stats)
-        {
-            pWriter.WriteByte();
-            pWriter.WriteByte(stats.TotalSockets);
-            for (int i = 0; i < stats.TotalSockets; i++)
-            {
-                if (i >= stats.Gemstones.Count)
+                pWriter.WriteInt(sockets[i].Gemstone.Id);
+                pWriter.WriteBool(sockets[i].Gemstone.OwnerId != 0);
+                if (sockets[i].Gemstone.OwnerId != 0)
                 {
-                    pWriter.WriteBool(false); // Locked
-                    continue;
+                    pWriter.WriteLong(sockets[i].Gemstone.OwnerId);
+                    pWriter.WriteUnicodeString(sockets[i].Gemstone.OwnerName);
                 }
-
-                pWriter.WriteBool(true); // Unlocked
-                Gemstone gem = stats.Gemstones[i];
-                pWriter.WriteInt(gem.Id);
-                pWriter.WriteBool(gem.OwnerId != 0);
-                if (gem.OwnerId != 0)
+                pWriter.WriteBool(sockets[i].Gemstone.IsLocked);
+                if (sockets[i].Gemstone.IsLocked)
                 {
-                    pWriter.WriteLong(gem.OwnerId);
-                    pWriter.WriteUnicodeString(gem.OwnerName);
-                }
-
-                pWriter.WriteBool(gem.Unknown != 0);
-                if (gem.Unknown != 0)
-                {
-                    pWriter.WriteByte();
-                    pWriter.WriteLong(gem.Unknown);
+                    pWriter.WriteBool(sockets[i].Gemstone.IsLocked);
+                    pWriter.WriteLong(sockets[i].Gemstone.UnlockTime);
                 }
             }
-
-            return pWriter;
         }
+
+        return pWriter;
+    }
+
+    private static PacketWriter WriteMusicScore(this PacketWriter pWriter, Item item)
+    {
+        pWriter.WriteInt(item.Score.Length);
+        pWriter.WriteInt(item.Score.Type);
+        pWriter.WriteUnicodeString(item.Score.Title);
+        pWriter.WriteUnicodeString(item.Score.Composer);
+        pWriter.WriteInt(4); // seems like it's always 4. 1 in KMS2. 
+        pWriter.WriteLong(item.Score.ComposerCharacterId);
+        pWriter.WriteBool(item.Score.Locked);
+        pWriter.WriteLong();
+        pWriter.WriteLong();
+        return pWriter;
     }
 }

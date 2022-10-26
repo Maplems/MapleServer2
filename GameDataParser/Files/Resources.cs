@@ -1,31 +1,22 @@
-﻿using System.Collections.Generic;
-using System.IO;
-using System.IO.MemoryMappedFiles;
-using GameDataParser.Crypto.Common;
+﻿using Maple2.File.IO;
+using Maple2Storage.Types;
 
-namespace GameDataParser.Files
+namespace GameDataParser.Files;
+
+public class MetadataResources
 {
-    public class MetadataResources
+    public readonly M2dReader XmlReader;
+    public readonly M2dReader ExportedReader;
+    public readonly M2dReader TokReader;
+
+    public MetadataResources()
     {
-        public List<PackFileEntry> XmlFiles;
-        public List<PackFileEntry> ExportedFiles;
+        string xmlPath = $"{Paths.RESOURCES_INPUT_DIR}/Xml.m2d";
+        string exportedPath = $"{Paths.RESOURCES_INPUT_DIR}/Exported.m2d";
+        string precomputedTerrainPath = $"{Paths.RESOURCES_INPUT_DIR}/PrecomputedTerrain.m2d";
 
-        public MemoryMappedFile XmlMemFile;
-        public MemoryMappedFile ExportedMemFile;
-
-        public MetadataResources()
-        {
-            string xmlPath = $"{Paths.INPUT}/Xml.m2d";
-            string exportedPath = $"{Paths.INPUT}/Exported.m2d";
-
-            string xmlHeaderPath = $"{Paths.INPUT}/Xml.m2h";
-            string exportedHeaderPath = $"{Paths.INPUT}/Exported.m2h";
-
-            XmlMemFile = MemoryMappedFile.CreateFromFile(xmlPath);
-            ExportedMemFile = MemoryMappedFile.CreateFromFile(exportedPath);
-
-            XmlFiles = FileList.ReadFile(File.OpenRead(xmlHeaderPath));
-            ExportedFiles = FileList.ReadFile(File.OpenRead(exportedHeaderPath));
-        }
+        XmlReader = new(xmlPath);
+        ExportedReader = new(exportedPath);
+        TokReader = new(precomputedTerrainPath);
     }
 }

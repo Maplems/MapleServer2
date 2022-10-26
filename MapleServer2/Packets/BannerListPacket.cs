@@ -1,30 +1,35 @@
 ﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Database.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class BannerListPacket
 {
-    public static class BannerListPacket
+    public static PacketWriter SetBanner(List<Banner> banners)
     {
-        public static Packet SetBanner()
+        PacketWriter pWriter = PacketWriter.Of(SendOp.BannerList);
+        pWriter.WriteShort((short) banners.Count);
+        foreach (Banner banner in banners)
         {
-            short count = 0; // TODO: Load banners
-
-            PacketWriter pWriter = PacketWriter.Of(SendOp.BANNER_LIST);
-            pWriter.WriteShort(count);
-            for (int i = 0; i < count; i++)
+            pWriter.WriteInt(banner.Id);
+            pWriter.WriteUnicodeString(banner.Name);
+            pWriter.WriteUnicodeString(banner.Type.ToString());
+            if (banner.Type is BannerType.left or BannerType.right)
             {
-                pWriter.WriteInt(); // Id
-                pWriter.WriteUnicodeString("name"); // Name
-                pWriter.WriteUnicodeString("merat"); // Type
-                pWriter.WriteUnicodeString(""); // Unknown
-                pWriter.WriteUnicodeString(""); // Unknown
-                pWriter.WriteUnicodeString("url"); // Url
-                pWriter.WriteInt(); // Language
-                pWriter.WriteLong(); // Timestamp
-                pWriter.WriteLong(); // Unknown
+                pWriter.WriteUnicodeString(banner.SubType.ToString());
             }
-
-            return pWriter;
+            else
+            {
+                pWriter.WriteUnicodeString();
+            }
+            pWriter.WriteUnicodeString();
+            pWriter.WriteUnicodeString(banner.ImageUrl);
+            pWriter.Write(banner.Language);
+            pWriter.WriteLong(banner.BeginTime);
+            pWriter.WriteLong(banner.EndTime);
         }
+
+        return pWriter;
     }
 }

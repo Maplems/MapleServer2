@@ -1,52 +1,54 @@
-﻿using MaplePacketLib2.Tools;
+﻿using Maple2Storage.Enums;
+using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class StatPointHandler : GamePacketHandler<StatPointHandler>
 {
-    public class StatPointHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.StatPoint;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.STAT_POINT;
+        Increment = 0x2,
+        Reset = 0x3
+    }
 
-        public StatPointHandler(ILogger<StatPointHandler> logger) : base(logger) { }
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode mode = (Mode) packet.ReadByte();
 
-        private enum StatPointMode : byte
+        switch (mode)
         {
-            Increment = 0x2,
-            Reset = 0x3
+            case Mode.Increment:
+                HandleStatIncrement(session, packet);
+                break;
+            case Mode.Reset:
+                HandleResetStatDistribution(session);
+                break;
+            default:
+                LogUnknownMode(mode);
+                break;
         }
+    }
 
-        public override void Handle(GameSession session, PacketReader packet)
-        {
-            StatPointMode mode = (StatPointMode) packet.ReadByte();
+    private static void HandleStatIncrement(GameSession session, PacketReader packet)
+    {
+        StatAttribute statTypeIndex = (StatAttribute) packet.ReadByte();
 
-            switch (mode)
-            {
-                case StatPointMode.Increment:
-                    HandleStatIncrement(session, packet);
-                    break;
-                case StatPointMode.Reset:
-                    HandleResetStatDistribution(session);
-                    break;
-                default:
-                    IPacketHandler<GameSession>.LogUnknownMode(mode);
-                    break;
-            }
-        }
+        session.Player.StatPointDistribution.AddPoint(statTypeIndex);
+        session.Player.FieldPlayer.ComputeStats();
+        session.Send(StatPointPacket.WriteStatPointDistribution(session.Player));
+        session.Send(StatPacket.SetStats(session.Player.FieldPlayer));
+    }
 
-        private static void HandleStatIncrement(GameSession session, PacketReader packet)
-        {
-            byte statTypeIndex = packet.ReadByte();
-            session.Player.StatPointDistribution.AddPoint(statTypeIndex);
-            session.Send(StatPointPacket.WriteStatPointDistribution(session.Player));
-        }
-
-        private static void HandleResetStatDistribution(GameSession session)
-        {
-            session.Player.StatPointDistribution.ResetPoints();
-            session.Send(StatPointPacket.WriteStatPointDistribution(session.Player));
-        }
+    private static void HandleResetStatDistribution(GameSession session)
+    {
+        session.Player.StatPointDistribution.ResetPoints();
+        session.Player.FieldPlayer.ComputeStats();
+        session.Send(StatPointPacket.WriteStatPointDistribution(session.Player));
+        session.Send(StatPacket.SetStats(session.Player.FieldPlayer));
     }
 }

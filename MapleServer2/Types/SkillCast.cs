@@ -1,49 +1,229 @@
-﻿using System;
+﻿using Maple2Storage.Enums;
+using Maple2Storage.Types;
+using Maple2Storage.Types.Metadata;
 using MapleServer2.Data.Static;
+using MapleServer2.Enums;
 
-namespace MapleServer2.Types
+namespace MapleServer2.Types;
+
+public class SkillCast
 {
-    public class SkillCast
+    public long SkillSn { get; }
+    public int SkillObjectId { get; set; }
+    public int SkillId;
+    public short SkillLevel;
+    public int ClientTick { get; }
+    public int ServerTick { get; }
+    public byte MotionPoint { get; }
+    public byte AttackPoint { get; set; }
+    public int Duration;
+    public int Interval;
+    public SkillCast? ParentSkill;
+
+    public SkillAttack SkillAttack;
+
+    public CoordF Position;
+    public CoordF Direction;
+    public CoordF Rotation;
+    public short LookDirection;
+    public float AimAngle;
+
+    public IFieldActor? Caster;
+    public IFieldActor Target;
+    public IFieldActor? Owner; // who the skill was casted at, not necessarily the same as caster
+
+    public bool MetadataExists => GetSkillMetadata() is not null;
+
+    public List<CoordF> EffectCoords = new();
+
+    public SkillCast()
     {
-        public long SkillSN { get; private set; }
-        public int EntityId { get; private set; }
-        public int SkillId { get; private set; }
-        public short SkillLevel { get; private set; }
-        public int UnkValue { get; private set; }
-
-        private double SkillDamage = 0;
-
-        public SkillCast(int id, short level, long skillSN, int value)
-        {
-            SkillSN = skillSN;
-            SkillId = id;
-            SkillLevel = level;
-            UnkValue = value;
-        }
-
-        public SkillCast()
-        {
-            SkillId = 1;
-            SkillLevel = 1;
-        }
-
-        public double GetDamage()
-        {
-            SkillCast skillCast = this;
-            SkillDamage = DamageHandler.CalculateSkillDamage(skillCast).GetDamage();
-            return SkillDamage;
-        }
-
-        public double GetDamageRate() => SkillMetadataStorage.GetSkill(SkillId).SkillLevels.Find(x => x.Level == SkillLevel).DamageRate;
-
-        public double GetCriticalDamage() => RollCrit() ? GetDamageRate() * 2 : GetDamageRate();
-
-        public bool RollCrit()
-        {
-            // TODO: Critic base on Stats
-            Random rnd = new Random();
-            double roll = rnd.NextDouble();
-            return roll > 0.5;
-        }
+        SkillId = 1;
+        SkillLevel = 1;
     }
+
+    public SkillCast(int id, short level)
+    {
+        SkillId = id;
+        SkillLevel = level;
+        SkillAttack = GetSkillMotions()?.FirstOrDefault()?.SkillAttacks.FirstOrDefault();
+    }
+
+    public SkillCast(int id, short level, long skillSn, int serverTick) : this(id, level)
+    {
+        SkillSn = skillSn;
+        ServerTick = serverTick;
+    }
+
+    public SkillCast(int id, short level, long skillSn, int serverTick, SkillCast parentSkill) : this(id, level, skillSn, serverTick)
+    {
+        ParentSkill = parentSkill;
+        Caster = parentSkill.Caster;
+        Position = parentSkill.Position;
+        Rotation = parentSkill.Rotation;
+        LookDirection = parentSkill.LookDirection;
+    }
+
+    public SkillCast(int id, short level, long skillSn, int serverTick, IFieldActor caster, int clientTick) : this(id, level, skillSn, serverTick)
+    {
+        Caster = caster;
+        ClientTick = clientTick;
+    }
+
+    public SkillCast(int id, short level, long skillSn, int serverTick, IFieldActor caster, int clientTick, byte attackPoint) : this(id, level, skillSn,
+        serverTick)
+    {
+        AttackPoint = attackPoint;
+        Caster = caster;
+        ClientTick = clientTick;
+    }
+
+    public float GetDamageRate() => SkillAttack?.DamageProperty.DamageRate ?? 0;
+
+    public double GetCriticalDamage() => 2 * GetDamageRate();
+
+    public int GetSpCost() => GetCurrentLevel()?.Spirit ?? 15;
+
+    public int GetStaCost() => GetCurrentLevel()?.Stamina ?? 10;
+
+    public DamageType GetSkillDamageType() => (DamageType) (GetSkillMetadata()?.DamageType ?? 0);
+
+    public Element GetElement() => (Element) GetSkillMetadata().Element;
+
+    public bool IsSpRecovery() => GetSkillMetadata().IsSpRecovery;
+
+    public bool IsGuaranteedCrit() => HasCompulsionType(2);
+
+    public int DurationTick()
+    {
+        int? durationTick = GetAdditionalData()?.Duration;
+        return durationTick ?? 5000;
+    }
+
+    public int MaxStack() => GetAdditionalData()?.MaxStack ?? 1;
+
+    public bool IsRecovery() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Buff, BuffSubType.Recovery);
+
+    public bool IsRecoveryFromBuff() => VerifySkillTypeOf(BuffType.Buff, BuffSubType.Recovery);
+
+    public SkillRangeType GetRangeType() => GetSkillMetadata().RangeType;
+
+    public int[] GetSkillGroups() => GetSkillMetadata().GroupIDs;
+
+    public bool IsGM() => VerifySkillTypeOf(SkillType.GM, SkillSubType.GM, BuffType.Buff, BuffSubType.Recovery);
+
+    public bool IsGlobal() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Global);
+
+    public bool IsBuff() => VerifySkillTypeOf(BuffType.Buff);
+
+    public bool IsUnspecifiedBuff() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Buff, BuffSubType.None);
+
+    public bool IsBuffToOwner() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Buff, BuffSubType.Owner);
+
+    public bool IsBuffToEntity() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Buff, BuffSubType.Entity);
+
+    public bool IsDebuffToEntity()
+    {
+        return VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Debuff, BuffSubType.Entity) ||
+               VerifySkillTypeOf(BuffType.Debuff, BuffSubType.Entity);
+    }
+
+    public bool IsStatus() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status);
+
+    public bool IsDebuffToOwner() => VerifySkillTypeOf(BuffType.Debuff, BuffSubType.Owner);
+
+    public bool IsDebuffElement() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Debuff, BuffSubType.Element);
+
+    public bool IsBuffShield() => VerifySkillTypeOf(SkillType.Active, SkillSubType.Status, BuffType.Buff, BuffSubType.Shield);
+
+    public bool HasCompulsionType(int type)
+    {
+        if (SkillAttack.CompulsionType == null)
+        {
+            return false;
+        }
+
+        return SkillAttack.CompulsionType.Any(compulsionType => type == compulsionType);
+    }
+
+    public bool IsChainSkill()
+    {
+        SkillMetadata skillData = GetSkillMetadata();
+        return skillData.Type == SkillType.Active && skillData.SubType == SkillSubType.None;
+    }
+
+    public List<SkillMotion> GetSkillMotions() => GetCurrentLevel()?.SkillMotions;
+
+    private bool VerifySkillTypeOf(SkillType type, SkillSubType subType)
+    {
+        SkillMetadata skillData = GetSkillMetadata();
+        if (skillData is null)
+        {
+            return false;
+        }
+
+        return skillData.Type == type && skillData.SubType == subType;
+    }
+
+    private bool VerifySkillTypeOf(SkillType type, SkillSubType subType, BuffType buffType, BuffSubType buffSubType)
+    {
+        SkillMetadata skillData = GetSkillMetadata();
+        if (skillData is null)
+        {
+            return false;
+        }
+
+        if (skillData.Type != type || skillData.SubType != subType)
+        {
+            return false;
+        }
+
+        SkillAdditionalData skillAdditionalData = GetAdditionalData();
+        if (skillAdditionalData is null)
+        {
+            return false;
+        }
+
+        return skillAdditionalData.BuffType == buffType && skillAdditionalData.BuffSubType == buffSubType;
+    }
+
+    private bool VerifySkillTypeOf(BuffType buffType, BuffSubType buffSubType)
+    {
+        if (IsChainSkill())
+        {
+            return false;
+        }
+
+        SkillAdditionalData skillAdditionalData = GetAdditionalData();
+        if (skillAdditionalData is null)
+        {
+            return false;
+        }
+
+        return skillAdditionalData.BuffType == buffType && skillAdditionalData.BuffSubType == buffSubType;
+    }
+
+    private bool VerifySkillTypeOf(BuffType buffType)
+    {
+        if (IsChainSkill())
+        {
+            return false;
+        }
+
+        SkillAdditionalData skillAdditionalData = GetAdditionalData();
+        if (skillAdditionalData is null)
+        {
+            return false;
+        }
+
+        return skillAdditionalData.BuffType == buffType;
+    }
+
+    private SkillMetadata GetSkillMetadata() => SkillMetadataStorage.GetSkill(SkillId);
+
+    private SkillLevel GetCurrentLevel() => GetSkillMetadata()?.SkillLevels.FirstOrDefault(s => s.Level == SkillLevel);
+
+    // Some skills don't have SkillAdditionalData for specific levels, if its null try to use the first level
+    private SkillAdditionalData GetAdditionalData() =>
+        GetCurrentLevel()?.SkillAdditionalData ?? GetSkillMetadata()?.SkillLevels.FirstOrDefault()?.SkillAdditionalData;
 }

@@ -1,28 +1,26 @@
-﻿using System.Collections.Generic;
-using System.IO;
+﻿using Maple2Storage.Types;
 using Maple2Storage.Types.Metadata;
-using MapleServer2.Constants;
+using MapleServer2.Tools;
 using ProtoBuf;
 
-namespace MapleServer2.Data.Static
+namespace MapleServer2.Data.Static;
+
+public static class PrestigeMetadataStorage
 {
-    public static class PrestigeMetadataStorage
+    private static readonly Dictionary<int, PrestigeReward> Rewards = new();
+
+    public static void Init()
     {
-        private static readonly Dictionary<int, PrestigeReward> rewards = new Dictionary<int, PrestigeReward>();
-
-        static PrestigeMetadataStorage()
+        using FileStream stream = MetadataHelper.GetFileStream(MetadataName.Prestige);
+        PrestigeMetadata metadata = Serializer.Deserialize<PrestigeMetadata>(stream);
+        foreach (PrestigeReward reward in metadata.Rewards)
         {
-            using FileStream stream = File.OpenRead($"{Paths.RESOURCES}/ms2-prestige-metadata");
-            PrestigeMetadata metadata = Serializer.Deserialize<PrestigeMetadata>(stream);
-            foreach (PrestigeReward reward in metadata.Rewards)
-            {
-                rewards.Add(reward.Level, reward);
-            }
+            Rewards.Add(reward.Level, reward);
         }
+    }
 
-        public static PrestigeReward GetReward(int level)
-        {
-            return rewards.GetValueOrDefault(level);
-        }
+    public static PrestigeReward? GetReward(int level)
+    {
+        return Rewards.GetValueOrDefault(level);
     }
 }

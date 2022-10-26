@@ -1,96 +1,124 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using Maple2Storage.Types.Metadata;
+﻿using Maple2Storage.Enums;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
-using MapleServer2.Enums;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class JobPacket
 {
-    public static class JobPacket
+    private enum Mode : byte
     {
-        // Close skill tree
-        public static Packet Close()
+        Update = 0x01,
+        Unk = 0x02,
+        Close = 0x08,
+        Save = 0x09,
+    }
+
+    public static PacketWriter UpdateSkillTab(IFieldObject<Player> fieldPlayer, HashSet<int> newSkillIds = null)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Job);
+        pWriter.WriteInt(fieldPlayer.ObjectId);
+        pWriter.Write(Mode.Update);
+        pWriter.WriteJobInfo(fieldPlayer.Value, newSkillIds);
+
+        return pWriter;
+    }
+
+    public static PacketWriter SendJob(IFieldObject<Player> fieldPlayer)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Job);
+        pWriter.WriteInt(fieldPlayer.ObjectId);
+        pWriter.Write(Mode.Unk);
+        pWriter.WriteJobInfo(fieldPlayer.Value);
+
+        return pWriter;
+    }
+
+    public static PacketWriter Close(IFieldActor<Player> fieldPlayer)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Job);
+
+        pWriter.WriteInt(fieldPlayer.ObjectId);
+        pWriter.Write(Mode.Close);
+        pWriter.WriteJobInfo(fieldPlayer.Value);
+
+        return pWriter;
+    }
+
+    public static PacketWriter Save(IFieldActor<Player> fieldPlayer, HashSet<int> newSkillIds = null)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Job);
+
+        pWriter.WriteInt(fieldPlayer.ObjectId);
+        pWriter.Write(Mode.Save);
+        pWriter.WriteJobInfo(fieldPlayer.Value, newSkillIds);
+
+        return pWriter;
+    }
+
+    public static void WriteJobInfo(this PacketWriter pWriter, Player player, HashSet<int> newSkillIds = null)
+    {
+        SkillTab newTab = new(player.CharacterId, player.JobCode, player.SubJobCode, player.ActiveSkillTabId, "skills");
+
+        // fail safe in case something like /setjob set an invalid job. the skill tab can be deleted if a bad job id is set
+        if (player.SkillTabs.Count == 0)
         {
-            // After a save the close sends the same save data again, but this doesn't seem to do anything so instead just write 0 int
-            PacketWriter pWriter = PacketWriter.Of(SendOp.JOB);
-
-            pWriter.WriteInt();
-
-            return pWriter;
+            player.SkillTabs.Add(newTab);
         }
 
-        // Save skill tree
-        public static Packet Save(Player character, int objectId = 0)
+        SkillTab skillTab = player.SkillTabs.First(x => x.TabId == player.ActiveSkillTabId);
+
+        pWriter.Write(player.SubJobCode);
+        bool flag = true;
+        pWriter.WriteBool(flag);
+        if (!flag)
         {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.JOB);
-
-            // Identifier info
-            pWriter.WriteInt(objectId);
-            pWriter.WriteByte(0x09); // Unknown, changes to 08 when closing skill tree after saving
-            pWriter.WriteEnum(character.JobCode);
-            pWriter.WriteByte(1); // Possibly always 01 byte
-            pWriter.WriteEnum(character.Job);
-
-            // Skill info
-            WriteSkills(pWriter, character);
-
-            return pWriter;
+            return;
         }
 
-        public static Packet WriteSkills(PacketWriter pWriter, Player character)
+        pWriter.Write(player.JobCode);
+        pWriter.WriteSkills(skillTab, SkillType.Active, newSkillIds);
+        pWriter.WriteSkills(skillTab, SkillType.Passive, newSkillIds);
+        pWriter.WriteByte(); // More skills?
+        pWriter.WriteByte(); // More skills?
+    }
+
+    public static void WriteSkills(this PacketWriter pWriter, SkillTab skillTab, SkillType type, HashSet<int> newSkillsId = null)
+    {
+        List<(int skillId, short skillLevel)> skills = skillTab.GetSkillsByType(type);
+        pWriter.WriteByte((byte) skills.Count);
+
+        foreach ((int skillId, short skillLevel) in skills)
         {
-            // Get skills
-            // Get first skill tab skills only for now, uncertain of how to have multiple skill tabs
-            Dictionary<int, SkillMetadata> skills = character.SkillTabs[0].SkillJob;
-
-            // Ordered list of skill ids (must be sent in this order)
-            List<int> ids = character.SkillTabs[0].Order;
-            byte split = (byte) Enum.Parse<JobSkillSplit>(Enum.GetName(character.Job));
-            int countId = ids[ids.Count - split]; // Split to last skill id
-            pWriter.WriteByte((byte) (ids.Count - split)); // Skill count minus split
-
-            // List of skills for given tab in format (byte zero) (byte learned) (int skill_id) (int skill_level) (byte zero)
-            foreach (int id in ids)
-            {
-                if (id == countId)
-                {
-                    pWriter.WriteByte(split); // Write that there are (split) skills left
-                }
-                pWriter.WriteByte();
-                pWriter.WriteByte(skills[id].Learned);
-                pWriter.WriteInt(id);
-                pWriter.WriteInt(skills[id].SkillLevels.Select(x => x.Level).FirstOrDefault());
-                pWriter.WriteByte();
-            }
-            pWriter.WriteShort(); // Ends with zero short
-
-            return pWriter;
+            pWriter.WriteBool(newSkillsId?.Contains(skillId) ?? false);
+            pWriter.WriteBool(skillLevel > 0); // Is it learned?
+            pWriter.WriteInt(skillId);
+            pWriter.WriteInt(Math.Max((int) skillLevel, 1));
+            pWriter.WriteByte();
         }
+    }
 
-        public static Packet WritePassiveSkills(PacketWriter pWriter, IFieldObject<Player> character)
+    public static void WritePassiveSkills(this PacketWriter pWriter, IFieldObject<Player> fieldPlayer)
+    {
+        Player player = fieldPlayer.Value;
+        SkillTab skillTab = player.SkillTabs.First(x => x.TabId == player.ActiveSkillTabId);
+
+        List<(int skillId, short skillLevel)> passiveSkillList = skillTab.GetSkillsByType(SkillType.Passive);
+        pWriter.WriteShort((short) passiveSkillList.Count);
+
+        foreach ((int skillId, short skillLevel) in passiveSkillList)
         {
-            // The x.Value.Learned == 1 is to filter for now, the skills by level 1 until player can be save on db.
-            List<SkillMetadata> passiveSkillList = character.Value.SkillTabs[0].SkillJob.Where(x => x.Value.Type == 1 && x.Value.Learned == 1).Select(x => x.Value).ToList();
-
-            pWriter.WriteShort((short) passiveSkillList.Count); // Passive skills learned count, has to be retrieve from player db.
-            // foreach passive skill learned, add it to the player
-            for (int i = 0; i < passiveSkillList.Count; i++)
-            {
-                pWriter.WriteInt(character.ObjectId);
-                pWriter.WriteInt(); // unk int
-                pWriter.WriteInt(character.ObjectId);
-                pWriter.WriteInt(); // unk int 2
-                pWriter.WriteInt(); // same as the unk int 2
-                pWriter.WriteInt(passiveSkillList[i].SkillId); // Passive skill id
-                pWriter.WriteShort((short) passiveSkillList[i].SkillLevels.Select(x => x.Level).FirstOrDefault()); // skill level
-                pWriter.WriteInt(1); // unk int = 1
-                pWriter.WriteByte(1); // unk byte = 1
-                pWriter.WriteLong();
-            }
-            return pWriter;
+            pWriter.WriteInt(fieldPlayer.ObjectId);
+            pWriter.WriteInt(); // unk int
+            pWriter.WriteInt(fieldPlayer.ObjectId);
+            pWriter.WriteInt(); // unk int 2
+            pWriter.WriteInt(); // same as the unk int 2
+            pWriter.WriteInt(skillId);
+            pWriter.WriteShort(skillLevel);
+            pWriter.WriteInt(1); // unk int = 1
+            pWriter.WriteByte(1); // unk byte = 1
+            pWriter.WriteLong();
         }
     }
 }

@@ -1,19 +1,17 @@
 ﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
-using MapleServer2.Servers.Game;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+internal class MesosPacket
 {
-    class MesosPacket
+    public static PacketWriter UpdateMesos(long mesoAmount)
     {
-        public static Packet UpdateMesos(GameSession session)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.MONEY);
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Meso);
 
-            pWriter.WriteLong(session.Player.Wallet.Meso.Amount); // Total amount of mesos
-            pWriter.WriteInt(); // unknown int
+        pWriter.WriteLong(mesoAmount); // Total amount of mesos
+        pWriter.WriteInt(); // unknown int
 
-            return pWriter;
-        }
+        return pWriter;
     }
 }

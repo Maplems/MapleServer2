@@ -1,122 +1,116 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using Maple2Storage.Enums;
+using Maple2Storage.Types.Metadata;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Data.Static;
+using MapleServer2.Enums;
+using MapleServer2.Managers;
+using MapleServer2.Managers.Actors;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
-using MapleServer2.Tools;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class FieldEnterHandler : GamePacketHandler<FieldEnterHandler>
 {
-    public class FieldEnterHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.ResponseFieldEnter;
+
+    public override void Handle(GameSession session, PacketReader packet)
     {
-        public override RecvOp OpCode => RecvOp.RESPONSE_FIELD_ENTER;
+        packet.ReadInt(); // ?
 
-        public FieldEnterHandler(ILogger<FieldEnterHandler> logger) : base(logger) { }
+        // Liftable: 00 00 00 00 00
+        // SendBreakable
+        // Self
+        Player player = session.Player;
+        Account account = player.Account;
+        session.EnterField(player);
+        session.Send(StatPacket.SetStats(player.FieldPlayer));
+        session.Send(StatPointPacket.WriteTotalStatPoints(player));
+        session.Send(StatPointPacket.WriteTotalStatPoints(player)); // This packet is sent twice on GMS, not sure why 
+        session.Send(StatPointPacket.WriteStatPointDistribution(player));
+        session.Send(SkillPointPacket.ExtraSkillPoints(player));
 
-        public override void Handle(GameSession session, PacketReader packet)
+        if (player.ActivePet is not null)
         {
-            packet.ReadInt(); // ?
-
-            // Liftable: 00 00 00 00 00
-            // SendBreakable
-            // Self
-            session.EnterField(session.Player.MapId);
-            session.Send(StatPacket.SetStats(session.FieldPlayer));
-            session.Send(StatPointPacket.WriteTotalStatPoints(session.Player));
-            session.Send(EmotePacket.LoadEmotes(session.Player));
-            session.Send(ChatStickerPacket.LoadChatSticker(session.Player));
-
-            // Normally skill layout would be loaded from a database
-            QuickSlot arrowStream = QuickSlot.From(10500001);
-            QuickSlot arrowBarrage = QuickSlot.From(10500011);
-            QuickSlot eagleGlide = QuickSlot.From(10500151);
-            QuickSlot testSkill = QuickSlot.From(10500153);
-
-            if (session.Player.GameOptions.TryGetHotbar(0, out Hotbar mainHotbar))
+            Pet pet = session.FieldManager.RequestPet(player.ActivePet, player.FieldPlayer);
+            if (pet is not null)
             {
-                /*
-                mainHotbar.MoveQuickSlot(4, arrowStream);
-                mainHotbar.MoveQuickSlot(5, arrowBarrage);
-                mainHotbar.MoveQuickSlot(6, eagleGlide);
-                mainHotbar.MoveQuickSlot(7, testSkill);
-                */
-                session.Send(KeyTablePacket.SendHotbars(session.Player.GameOptions));
+                player.FieldPlayer.ActivePet = pet;
+
+                session.Send(PetPacket.LoadPetSettings(pet));
+                session.Send(NoticePacket.Notice(SystemNotice.PetSummonOn, NoticeType.Chat | NoticeType.FastText));
+            }
+        }
+
+        if (account.IsVip())
+        {
+            List<PremiumClubEffectMetadata> effectMetadatas = PremiumClubEffectMetadataStorage.GetBuffs();
+            foreach (PremiumClubEffectMetadata effect in effectMetadatas)
+            {
+                player.FieldPlayer.AdditionalEffects.AddEffect(new(effect.EffectId, effect.EffectLevel)
+                {
+                    IsBuff = true
+                });
             }
 
-            // Add catalysts for testing
 
-            Item item = new Item(40100001)
-            {
-                Amount = 99999
-            };
-            Item item2 = new Item(40100001)
-            {
-                Amount = 90000
-            };
-            Item item3 = new Item(20302228)
-            {
-                Amount = 1
-            };
-
-            InventoryController.Add(session, item, true);
-            InventoryController.Add(session, item2, true);
-            InventoryController.Add(session, item3, true);
-
-            //Add mail for testing
-            //System mail without any item
-            Mail sysMail = new Mail
-            (
-                101,
-                session.Player.CharacterId,
-                "50000002",
-                "",
-                "",
-                0,
-                DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                null
-            );
-
-            // System mail with an item
-            List<Item> items = new List<Item>
-            {
-                new Item(40100001) // 20302228
-                {
-                    CreationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    Owner = session.Player,
-                    Amount = 10000
-                }
-            };
-            Mail sysItemMail = new Mail
-            (
-                101,
-                session.Player.CharacterId,
-                "53000042",
-                "",
-                "",
-                0,
-                DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                items
-            );
-
-            // Regular mail
-            Mail regMail = new Mail
-            (
-                1,
-                session.Player.CharacterId,
-                session.Player.Name,
-                "Test Title",
-                "Test Body",
-                0,
-                DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                null
-            );
-
-            session.Player.Mailbox.AddOrUpdate(sysItemMail);
-            session.Player.Mailbox.AddOrUpdate(sysMail);
-            session.Player.Mailbox.AddOrUpdate(regMail);
+            session.Send(PremiumClubPacket.ActivatePremium(player.FieldPlayer, account.VIPExpiration));
         }
+        session.Send(PremiumClubPacket.LoadItems(account.PremiumClubRewardsClaimed));
+
+        session.Send(EmotePacket.LoadEmotes(player));
+        session.Send(MacroPacket.LoadControls(player.Macros));
+        foreach (Wardrobe wardrobe in player.Wardrobes)
+        {
+            session.Send(WardrobePacket.Load(wardrobe));
+        }
+        session.Send(ChatStickerPacket.LoadChatSticker(player));
+
+        session.Send(CubePacket.DecorationScore(account.Home));
+        session.Send(CubePacket.LoadHome(player.FieldPlayer.ObjectId, player.Account.Home));
+        session.Send(CubePacket.ReturnMap(player.ReturnMapId));
+        session.Send(LapenshardPacket.Load(player.Inventory.LapenshardStorage));
+
+        IEnumerable<Cube> cubes = session.FieldManager.State.Cubes.Values
+            .Where(x => x.Value.PlotNumber == 1 && x.Value.Item.HousingCategory is ItemHousingCategory.Farming or ItemHousingCategory.Ranching)
+            .Select(x => x.Value);
+        foreach (Cube cube in cubes)
+        {
+            session.Send(FunctionCubePacket.UpdateFunctionCube(cube.CoordF.ToByte(), 2, 1));
+        }
+
+        if (player.Party is not null)
+        {
+            session.Send(PartyPacket.UpdatePlayer(player));
+        }
+
+        GlobalEvent globalEvent = GameServer.GlobalEventManager.GetCurrentEvent();
+        if (globalEvent is not null && !MapMetadataStorage.MapIsInstancedOnly(player.MapId))
+        {
+            session.Send(GlobalPortalPacket.Notice(globalEvent));
+        }
+
+        FieldWar fieldWar = GameServer.FieldWarManager.CurrentFieldWar;
+        if (fieldWar is not null && !MapMetadataStorage.MapIsInstancedOnly(player.MapId) && fieldWar.MapId != player.MapId)
+        {
+            session.Send(FieldWarPacket.LegionPopup(fieldWar.Id, fieldWar.EntryClosureTime.ToUnixTimeSeconds()));
+        }
+
+        session.Send(KeyTablePacket.SendHotbars(player.GameOptions));
+
+        TrophyManager.OnMapEntered(player, player.MapId);
+
+        QuestManager.OnMapEnter(player, player.MapId);
+
+
+        MapProperty mapProperty = MapMetadataStorage.GetMapProperty(player.MapId);
+        for (int i = 0; i < mapProperty.EnterBuffIds.Count; i++)
+        {
+            player.FieldPlayer.AdditionalEffects.AddEffect(new(mapProperty.EnterBuffIds[i], mapProperty.EnterBuffLevels[i]));
+        }
+
+        player.InitializeEffects();
     }
 }

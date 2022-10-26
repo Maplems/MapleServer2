@@ -1,93 +1,119 @@
 ﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
-using MapleServer2.Extensions;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class KeyTableHandler : GamePacketHandler<KeyTableHandler>
 {
-    public class KeyTableHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.KeyTable;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.KEY_TABLE;
+        SetMacroKeybind = 0x01,
+        SetKeyBind = 0x02,
+        MoveQuickSlot = 0x03,
+        AddToFirstSlot = 0x04,
+        RemoveQuickSlot = 0x05,
+        SetActiveHotbar = 0x08
+    }
 
-        public KeyTableHandler(ILogger<KeyTableHandler> logger) : base(logger) { }
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode requestType = (Mode) packet.ReadByte();
 
-        public override void Handle(GameSession session, PacketReader packet)
+        switch (requestType)
         {
-            byte requestType = packet.ReadByte();
+            case Mode.SetMacroKeybind:
+            case Mode.SetKeyBind:
+                SetKeyBinds(session, packet);
+                break;
+            case Mode.MoveQuickSlot:
+                MoveQuickSlot(session, packet);
+                break;
+            case Mode.AddToFirstSlot:
+                AddToQuickSlot(session, packet);
+                break;
+            case Mode.RemoveQuickSlot:
+                RemoveQuickSlot(session, packet);
+                break;
+            case Mode.SetActiveHotbar:
+                SetActiveHotbar(session, packet);
+                break;
+            default:
+                LogUnknownMode(requestType);
+                break;
+        }
+    }
 
-            switch (requestType)
-            {
-                case 2:
-                    SetKeyBinds(session, packet);
-                    break;
-                case 3:
-                    MoveQuickSlot(session, packet);
-                    break;
-                case 5:
-                    RemoveQuickSlot(session, packet);
-                    break;
-                case 8:
-                    SetActiveHotbar(session, packet);
-                    break;
-                default:
-                    Logger.Warning($"Unknown request type {requestType}");
-                    break;
-            }
+    private static void AddToQuickSlot(GameSession session, PacketReader packet)
+    {
+        short hotbarId = packet.ReadShort();
+        if (!session.Player.GameOptions.TryGetHotbar(hotbarId, out Hotbar targetHotbar))
+        {
+            Logger.Warning("Invalid hotbar id {hotbarId}", hotbarId);
+            return;
         }
 
-        private static void SetKeyBinds(GameSession session, PacketReader packet)
+        QuickSlot quickSlot = packet.Read<QuickSlot>();
+        int targetSlot = packet.ReadInt();
+        if (targetHotbar.AddToFirstSlot(quickSlot))
         {
-            int numBindings = packet.ReadInt();
-
-            for (int i = 0; i < numBindings; i++)
-            {
-                KeyBind keyBind = packet.Read<KeyBind>();
-                session.Player.GameOptions.SetKeyBind(ref keyBind);
-            }
-        }
-
-        private void MoveQuickSlot(GameSession session, PacketReader packet)
-        {
-            short hotbarId = packet.ReadShort();
-            if (!session.Player.GameOptions.TryGetHotbar(hotbarId, out Hotbar targetHotbar))
-            {
-                Logger.Warning($"Invalid hotbar id {hotbarId}");
-                return;
-            }
-
-            // Adds or moves a quickslot around
-            QuickSlot quickSlot = packet.Read<QuickSlot>();
-            int targetSlot = packet.ReadInt();
-            targetHotbar.MoveQuickSlot(targetSlot, quickSlot);
-
             session.Send(KeyTablePacket.SendHotbars(session.Player.GameOptions));
         }
+    }
 
-        private void RemoveQuickSlot(GameSession session, PacketReader packet)
+    private static void SetKeyBinds(GameSession session, PacketReader packet)
+    {
+        int numBindings = packet.ReadInt();
+
+        for (int i = 0; i < numBindings; i++)
         {
-            short hotbarId = packet.ReadShort();
-            if (!session.Player.GameOptions.TryGetHotbar(hotbarId, out Hotbar targetHotbar))
-            {
-                Logger.Warning($"Invalid hotbar id {hotbarId}");
-                return;
-            }
+            KeyBind keyBind = packet.Read<KeyBind>();
+            session.Player.GameOptions.SetKeyBind(ref keyBind);
+        }
+    }
 
-            int skillId = packet.ReadInt();
-            long itemUid = packet.ReadLong();
-            if (targetHotbar.RemoveQuickSlot(skillId, itemUid))
-            {
-                session.Send(KeyTablePacket.SendHotbars(session.Player.GameOptions));
-            }
+    private static void MoveQuickSlot(GameSession session, PacketReader packet)
+    {
+        short hotbarId = packet.ReadShort();
+        if (!session.Player.GameOptions.TryGetHotbar(hotbarId, out Hotbar targetHotbar))
+        {
+            Logger.Warning("Invalid hotbar id {hotbarId}", hotbarId);
+            return;
         }
 
-        private static void SetActiveHotbar(GameSession session, PacketReader packet)
-        {
-            short hotbarId = packet.ReadShort();
+        // Adds or moves a quickslot around
+        QuickSlot quickSlot = packet.Read<QuickSlot>();
+        int targetSlot = packet.ReadInt();
+        targetHotbar.MoveQuickSlot(targetSlot, quickSlot);
 
-            session.Player.GameOptions.SetActiveHotbar(hotbarId);
+        session.Send(KeyTablePacket.SendHotbars(session.Player.GameOptions));
+    }
+
+    private static void RemoveQuickSlot(GameSession session, PacketReader packet)
+    {
+        short hotbarId = packet.ReadShort();
+        if (!session.Player.GameOptions.TryGetHotbar(hotbarId, out Hotbar targetHotbar))
+        {
+            Logger.Warning("Invalid hotbar id {hotbarId}", hotbarId);
+            return;
         }
+
+        int skillId = packet.ReadInt();
+        long itemUid = packet.ReadLong();
+        if (targetHotbar.RemoveQuickSlot(skillId, itemUid))
+        {
+            session.Send(KeyTablePacket.SendHotbars(session.Player.GameOptions));
+        }
+    }
+
+    private static void SetActiveHotbar(GameSession session, PacketReader packet)
+    {
+        short hotbarId = packet.ReadShort();
+
+        session.Player.GameOptions.SetActiveHotbar(hotbarId);
     }
 }

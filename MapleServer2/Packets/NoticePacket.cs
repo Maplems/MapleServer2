@@ -1,37 +1,64 @@
 ﻿using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Enums;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class NoticePacket
 {
-    public static class NoticePacket
+    private enum Mode : byte
     {
-        private enum NoticePacketMode : byte
+        Send = 0x04,
+        Quit = 0x05
+    }
+
+    public static PacketWriter Notice(string message, NoticeType type = NoticeType.Mint, short durationSec = 0)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Notice);
+        pWriter.Write(Mode.Send);
+        pWriter.WriteShort((short) type);
+        pWriter.WriteByte();
+        pWriter.WriteInt();
+        pWriter.WriteUnicodeString(message);
+        if (type.HasFlag(NoticeType.Mint))
         {
-            Red = 0x04
+            pWriter.WriteShort(durationSec);
         }
+        return pWriter;
+    }
 
-        public static Packet Notice(string message, byte type = 0x10)
+    public static PacketWriter Notice(SystemNotice notice, NoticeType type = NoticeType.Mint, List<string> parameters = null, short durationSec = 0)
+    {
+        parameters ??= new();
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Notice);
+        pWriter.Write(Mode.Send);
+        WriteNotice(pWriter, notice, type, parameters, durationSec);
+        return pWriter;
+    }
+
+    public static PacketWriter QuitNotice(SystemNotice notice, NoticeType type = NoticeType.Mint, List<string> parameters = null, short durationSec = 0)
+    {
+        parameters ??= new();
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Notice);
+        pWriter.Write(Mode.Quit);
+        WriteNotice(pWriter, notice, type, parameters, durationSec);
+        return pWriter;
+    }
+
+    public static void WriteNotice(PacketWriter pWriter, SystemNotice notice, NoticeType type = NoticeType.Mint, List<string> parameters = null, short durationSec = 0)
+    {
+        pWriter.WriteShort((short) type);
+        pWriter.WriteByte(0x1);
+        pWriter.WriteInt(0x1);
+        pWriter.Write(notice);
+        pWriter.WriteInt(parameters.Count);
+        foreach (string parameter in parameters)
         {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.NOTICE);
-
-            pWriter.WriteEnum(NoticePacketMode.Red); // Only known mode atm
-            /* Known types
-            00 chat
-            01 chat
-            05 chat and fast text
-            10 mint
-            11 chat and mint
-            14 fast text
-            15 chat and fast text
-            */
-            pWriter.WriteByte(type);
-            pWriter.WriteByte();
-            pWriter.WriteByte();
-            pWriter.WriteInt();
-            pWriter.WriteUnicodeString(message);
-            pWriter.WriteShort();
-
-            return pWriter;
+            pWriter.WriteUnicodeString(parameter);
+        }
+        if (type.HasFlag(NoticeType.Mint))
+        {
+            pWriter.WriteShort(durationSec);
         }
     }
 }

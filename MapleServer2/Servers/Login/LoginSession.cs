@@ -1,29 +1,29 @@
-﻿using System;
-using MapleServer2.Enums;
+﻿using MapleServer2.Enums;
 using MapleServer2.Network;
-using Microsoft.Extensions.Logging;
+using MapleServer2.Packets;
 
-namespace MapleServer2.Servers.Login
+namespace MapleServer2.Servers.Login;
+
+public class LoginSession : Session
 {
-    public class LoginSession : Session
+    protected override PatchType Type => PatchType.Delete;
+
+    public long AccountId;
+    public long CharacterId;
+    public int ServerTick;
+    public int ClientTick;
+
+    protected override void EndSession(bool logoutNotice) { }
+
+    public Task HeartbeatLoop()
     {
-        protected override SessionType Type => SessionType.Login;
-
-        public long AccountId;
-        private readonly Random Rng;
-
-        public LoginSession(ILogger<LoginSession> logger) : base(logger)
+        return Task.Run(async () =>
         {
-            Rng = new Random();
-        }
-
-        public int GetToken()
-        {
-            return Rng.Next();
-        }
-
-        public override void EndSession()
-        {
-        }
+            while (this != null)
+            {
+                Send(HeartbeatPacket.Request());
+                await Task.Delay(30000); // every 30 seconds
+            }
+        });
     }
 }

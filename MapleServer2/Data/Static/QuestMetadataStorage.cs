@@ -1,59 +1,39 @@
-﻿using System.Collections.Generic;
-using System.IO;
+﻿using Maple2Storage.Enums;
+using Maple2Storage.Types;
 using Maple2Storage.Types.Metadata;
-using MapleServer2.Constants;
+using MapleServer2.Enums;
+using MapleServer2.Tools;
 using ProtoBuf;
 
-namespace MapleServer2.Data.Static
+namespace MapleServer2.Data.Static;
+
+public static class QuestMetadataStorage
 {
-    public static class QuestMetadataStorage
+    private static readonly Dictionary<int, QuestMetadata> Quests = new();
+
+    public static void Init()
     {
-        private static readonly Dictionary<int, QuestMetadata> map = new Dictionary<int, QuestMetadata>();
-
-        static QuestMetadataStorage()
+        using FileStream stream = MetadataHelper.GetFileStream(MetadataName.Quest);
+        List<QuestMetadata> items = Serializer.Deserialize<List<QuestMetadata>>(stream);
+        foreach (QuestMetadata item in items)
         {
-            using FileStream stream = File.OpenRead($"{Paths.RESOURCES}/ms2-quest-metadata");
-            List<QuestMetadata> items = Serializer.Deserialize<List<QuestMetadata>>(stream);
-            foreach (QuestMetadata item in items)
-            {
-                map[item.Basic.QuestID] = item;
-            }
+            Quests[item.Basic.Id] = item;
         }
-        public static QuestMetadata GetMetadata(int questId)
-        {
-            return map.GetValueOrDefault(questId);
-        }
-
-        public static int GetQuestsCount()
-        {
-            return map.Count;
-        }
-
-        public static List<QuestMetadata> GetAvailableQuests(int level)
-        {
-            List<QuestMetadata> list = new List<QuestMetadata>();
-
-            foreach (KeyValuePair<int, QuestMetadata> item in map)
-            {
-                // Only getting navigator quests to not annoy everyone with quests popping up every restart
-                if (level >= item.Value.Require.Level && item.Value.Require.RequiredQuests.Count == 0 && item.Key > 70000000 && item.Key < 70100000)
-                {
-                    list.Add(item.Value);
-                }
-            }
-
-            return list;
-        }
-
-        public static Dictionary<int, QuestMetadata> GetAllQuests()
-        {
-            return map;
-        }
-
-        public static bool IsValid(int questId)
-        {
-            return map.ContainsKey(questId);
-        }
-
     }
+
+    public static QuestMetadata? GetMetadata(int questId) => Quests.GetValueOrDefault(questId);
+
+    public static List<QuestMetadata> GetAvailableQuests(int level, JobCode jobCode)
+    {
+        // TODO: Check achievement
+        return Quests.Values.Where(questMetadata => questMetadata.Require.Level <= level
+                                                    && (questMetadata.Require.Job.Contains((short) jobCode) || questMetadata.Require.Job.Count == 0)
+                                                    && questMetadata.Require.RequiredQuests.Count == 0
+                                                    && questMetadata.Basic.QuestType is QuestType.Epic or QuestType.World)
+            .ToList();
+    }
+
+    public static Dictionary<int, QuestMetadata> GetAllQuests() => Quests;
+
+    public static bool IsValid(int questId) => Quests.ContainsKey(questId);
 }

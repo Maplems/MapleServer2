@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 16
-VisualStudioVersion = 16.0.29609.76
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31612.314
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MapleServer2", "MapleServer2\MapleServer2.csproj", "{75C6A294-BB12-4003-A3D8-F5472DBE1ACD}"
 EndProject
@@ -14,9 +14,16 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{AC72CD08-B2A9-4D37-B26B-638C64DC1D8A}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
+		.env = .env
+		.env.example = .env.example
+		.gitignore = .gitignore
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ms2Database", "Ms2Database\Ms2Database.csproj", "{F021381E-8A42-4A9F-8183-47783ED4BB4C}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MapleWebServer", "MapleWebServer\MapleWebServer.csproj", "{C8155CD0-226E-4A7B-8016-94F0FB55858C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{0711998C-75B9-4B4C-B8AF-C5227FE9EB27}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MapleServer2.Tests", "MapleServer2.Tests\MapleServer2.Tests.csproj", "{A694A8FF-DCD2-4A0A-821C-F134D35E4E95}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -39,15 +46,22 @@ Global
 		{977E8028-3EB4-4DBA-9AC4-81961AAEEB9A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{977E8028-3EB4-4DBA-9AC4-81961AAEEB9A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{977E8028-3EB4-4DBA-9AC4-81961AAEEB9A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{F021381E-8A42-4A9F-8183-47783ED4BB4C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F021381E-8A42-4A9F-8183-47783ED4BB4C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{F021381E-8A42-4A9F-8183-47783ED4BB4C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F021381E-8A42-4A9F-8183-47783ED4BB4C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C8155CD0-226E-4A7B-8016-94F0FB55858C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C8155CD0-226E-4A7B-8016-94F0FB55858C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C8155CD0-226E-4A7B-8016-94F0FB55858C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C8155CD0-226E-4A7B-8016-94F0FB55858C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A694A8FF-DCD2-4A0A-821C-F134D35E4E95}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A694A8FF-DCD2-4A0A-821C-F134D35E4E95}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A694A8FF-DCD2-4A0A-821C-F134D35E4E95}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A694A8FF-DCD2-4A0A-821C-F134D35E4E95}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {916C0D22-565A-4BB2-B94D-D1CC2926E3A3}
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{A694A8FF-DCD2-4A0A-821C-F134D35E4E95} = {0711998C-75B9-4B4C-B8AF-C5227FE9EB27}
 	EndGlobalSection
 EndGlobal

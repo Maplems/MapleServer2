@@ -2,24 +2,25 @@
 using MapleServer2.Constants;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets
-{
-    public static class VibratePacket
-    {
-        public static Packet Vibrate(string objectHash, long someId, int objectId, int flag, Player player, int clientTicks)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.VIBRATE);
-            pWriter.WriteByte(1);
-            pWriter.WriteMapleString(objectHash);
-            pWriter.WriteLong(someId);
-            pWriter.WriteInt(objectId);
-            pWriter.WriteInt(flag);
-            pWriter.Write(player.Coord.ToShort());
-            pWriter.WriteInt(clientTicks);
-            pWriter.WriteMapleString("");
-            pWriter.WriteByte();
+namespace MapleServer2.Packets;
 
-            return pWriter;
-        }
+public static class VibratePacket
+{
+    public static PacketWriter Vibrate(string objectHash, SkillCast skillCast)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Vibrate);
+        pWriter.WriteByte(1);
+        pWriter.WriteString(objectHash);
+        pWriter.WriteLong(skillCast.SkillSn);
+        pWriter.WriteInt(skillCast.SkillId);
+        pWriter.WriteShort(skillCast.SkillLevel);
+        pWriter.WriteByte(); // motion point?
+        pWriter.WriteByte();
+        pWriter.Write(skillCast.Position.ToShort());
+        pWriter.Write(skillCast.ServerTick);
+        pWriter.WriteString();
+        pWriter.WriteByte();
+
+        return pWriter;
     }
 }

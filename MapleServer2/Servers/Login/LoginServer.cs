@@ -1,21 +1,41 @@
 ﻿using Autofac;
 using MapleServer2.Network;
-using Microsoft.Extensions.Logging;
+using Serilog;
 
-namespace MapleServer2.Servers.Login
+namespace MapleServer2.Servers.Login;
+
+public class LoginServer : Server<LoginSession>
 {
-    public class LoginServer : Server<LoginSession>
+    private List<LoginSession> Sessions;
+
+    private readonly ILogger Logger = Log.Logger.ForContext<LoginServer>();
+
+    public LoginServer(PacketRouter<LoginSession> router, IComponentContext context) : base(router, context) { }
+
+    public void Start()
     {
-        public const int PORT = 20001;
+        ushort port = ushort.Parse(Environment.GetEnvironmentVariable("LOGIN_PORT"));
+        Start(port);
+        Sessions = new();
+        Logger.Information("Login Server started.");
+    }
 
-        public LoginServer(PacketRouter<LoginSession> router, ILogger<LoginServer> logger, IComponentContext context)
-            : base(router, logger, context)
-        {
-        }
+    public override void AddSession(LoginSession session)
+    {
+        Sessions.Add(session);
+        Logger.Information("Login client connected: {session}", session);
+        session.Start();
+    }
 
-        public void Start()
-        {
-            base.Start(PORT);
-        }
+    public override void RemoveSession(LoginSession session)
+    {
+        Sessions.Remove(session);
+        Logger.Information("Login client disconnected: {session}", session);
+    }
+
+    public IEnumerable<LoginSession> GetSessions()
+    {
+        Sessions.RemoveAll(x => !x.Connected());
+        return Sessions;
     }
 }

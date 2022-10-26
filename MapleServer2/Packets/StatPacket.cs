@@ -1,95 +1,94 @@
-﻿using MaplePacketLib2.Tools;
+﻿using Maple2Storage.Enums;
+using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
 using MapleServer2.Types;
 
-namespace MapleServer2.Packets
+namespace MapleServer2.Packets;
+
+public static class StatPacket
 {
-    public static class StatPacket
+    private enum StatsMode : byte
     {
-        private enum StatsMode : byte
+        SetStats = 0x00,
+        UpdateStats = 0x01,
+        SendAllStats = 0x23
+    }
+
+    /// <summary>
+    /// Update specific stats.
+    /// </summary>
+    public static PacketWriter UpdateStats(IFieldActor actor, params StatAttribute[] attributes)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Stat);
+        pWriter.WriteInt(actor.ObjectId);
+        pWriter.WriteByte(); // Unknown when to use 0 or 1
+        pWriter.WriteByte((byte) attributes.Length);
+        foreach (StatAttribute attribute in attributes)
         {
-            SendStats = 0x23,
-            UpdateStats = 0x4
+            pWriter.WriteByte((byte) attribute);
+            pWriter.WriteStat(attribute, actor.Stats[attribute]);
         }
 
-        public static Packet SetStats(IFieldObject<Player> player)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.STAT);
-            pWriter.WriteInt(player.ObjectId);
-            pWriter.WriteByte();
-            pWriter.WriteEnum(StatsMode.SendStats);
-            pWriter.Write(player.Value.Stats);
+        return pWriter;
+    }
 
-            return pWriter;
+    /// <summary>
+    /// Update all stats.
+    /// </summary>
+    public static PacketWriter SetStats(IFieldActor actor)
+    {
+        PacketWriter pWriter = PacketWriter.Of(SendOp.Stat);
+        pWriter.WriteInt(actor.ObjectId);
+        pWriter.WriteByte(); // Unknown (0x00/0x01)
+        pWriter.Write(StatsMode.SendAllStats);
+        for (int i = 0; i < (int) StatsMode.SendAllStats; i++)
+        {
+            StatAttribute statAttribute = (StatAttribute) i;
+            pWriter.WriteStat(statAttribute, actor.Stats.Data[statAttribute]);
         }
 
-        public static Packet UpdateMobStats(IFieldObject<Mob> mob)
-        {
-            PacketWriter pWriter = PacketWriter.Of(SendOp.STAT);
-            pWriter.WriteInt(mob.ObjectId);
-            pWriter.WriteByte();
-            pWriter.WriteByte(1);
-            pWriter.WriteEnum(StatsMode.UpdateStats);
-            pWriter.WriteLong(mob.Value.Stats.Hp.Total);
-            pWriter.WriteLong(mob.Value.Stats.Hp.Min);
-            pWriter.WriteLong(mob.Value.Stats.Hp.Max);
+        return pWriter;
+    }
 
-            return pWriter;
+    public static void DefaultStatsMob(this PacketWriter pWriter, IFieldActor mob)
+    {
+        pWriter.Write(StatsMode.SendAllStats);
+        pWriter.WriteLong(mob.Stats[StatAttribute.Hp].Bonus);
+        pWriter.WriteInt(100); // Move speed (?)
+        pWriter.WriteLong(mob.Stats[StatAttribute.Hp].Base);
+        pWriter.WriteInt(100); // Move speed (?)
+        pWriter.WriteLong(mob.Stats[StatAttribute.Hp].Total);
+        pWriter.WriteInt(100); // Move speed (?)
+    }
+
+    public static void WriteFieldStats(this PacketWriter pWriter, Stats stats)
+    {
+        pWriter.Write(StatsMode.SendAllStats);
+        for (int i = 0; i < 3; i++)
+        {
+            pWriter.WriteLong(stats[StatAttribute.Hp][i]);
+            pWriter.WriteInt(stats[StatAttribute.AttackSpeed][i]);
+            pWriter.WriteInt(stats[StatAttribute.MovementSpeed][i]);
+            pWriter.WriteInt(stats[StatAttribute.MountMovementSpeed][i]);
+            pWriter.WriteInt(stats[StatAttribute.JumpHeight][i]);
         }
+    }
 
-        public static void DefaultStatsMob(this PacketWriter pWriter, IFieldObject<Mob> mob)
+    private static void WriteStat(this PacketWriter pWriter, StatAttribute statAttribute, Stat stat)
+    {
+        if (statAttribute is StatAttribute.Hp)
         {
-            pWriter.WriteEnum(StatsMode.SendStats);
             for (int i = 0; i < 3; i++)
             {
-                pWriter.WriteLong(mob.Value.Stats.Hp[i]);
-                pWriter.WriteInt();
+                pWriter.WriteLong(stat[i]);
             }
+
+            return;
         }
 
-        public static void DefaultStatsNpc(this PacketWriter pWriter)
+        for (int i = 0; i < 3; i++)
         {
-            byte flag = (byte) StatsMode.SendStats;
-            pWriter.WriteEnum(StatsMode.SendStats);
-            if (flag == 1)
-            {
-                byte value = 0;
-                pWriter.WriteByte(value);
-                if (value == 4)
-                {
-                    pWriter.WriteLong();
-                    pWriter.WriteLong();
-                    pWriter.WriteLong();
-                }
-                else
-                {
-                    pWriter.WriteInt();
-                    pWriter.WriteInt();
-                    pWriter.WriteInt();
-                }
-            }
-            else
-            {
-                pWriter.WriteLong(5);
-                pWriter.WriteInt();
-                pWriter.WriteLong(5);
-                pWriter.WriteInt();
-                pWriter.WriteLong(5);
-                pWriter.WriteInt();
-            }
-        }
-
-        public static void WriteTotalStats(this PacketWriter pWriter, ref PlayerStats stats)
-        {
-            pWriter.WriteEnum(StatsMode.SendStats);
-            for (int i = 0; i < 3; i++)
-            {
-                pWriter.WriteLong(stats.Hp[i]);
-                pWriter.WriteInt(stats.AtkSpd[i]);
-                pWriter.WriteInt(stats.MoveSpd[i]);
-                pWriter.WriteInt(stats.MountSpeed[i]);
-                pWriter.WriteInt(stats.JumpHeight[i]);
-            }
+            pWriter.WriteInt(stat[i]);
         }
     }
 }

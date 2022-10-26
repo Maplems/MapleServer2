@@ -1,179 +1,303 @@
-﻿using System;
-using System.Collections.Generic;
-using Maple2Storage.Types;
-using Maple2Storage.Types.Metadata;
+﻿using Maple2Storage.Enums;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
-using MapleServer2.Data;
 using MapleServer2.Data.Static;
-using MapleServer2.Extensions;
+using MapleServer2.Database;
+using MapleServer2.Database.Types;
 using MapleServer2.Network;
+using MapleServer2.PacketHandlers.Game.Helpers;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
 using MapleServer2.Servers.Login;
 using MapleServer2.Tools;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Common
+namespace MapleServer2.PacketHandlers.Common;
+
+public class ResponseKeyHandler : CommonPacketHandler<ResponseKeyHandler>
 {
-    public class ResponseKeyHandler : CommonPacketHandler
+    public override RecvOp OpCode => RecvOp.ResponseKey;
+
+    public override void Handle(GameSession session, PacketReader packet)
     {
-        public override RecvOp OpCode => RecvOp.RESPONSE_KEY;
-
-        public ResponseKeyHandler(ILogger<ResponseKeyHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+        long accountId = packet.ReadLong();
+        if (accountId is 0)
         {
-            long accountId = packet.ReadLong();
-            AuthData authData = AuthStorage.GetData(accountId);
+            Logger.Error("Account ID was 0. Login has failed or connection was made directly to game server.");
+            session.Send(LoginResultPacket.SendLoginMode(LoginMode.SessionVerificationFailed));
+            return;
+        }
 
-            // Backwards seeking because we read accountId here
-            packet.Skip(-8);
-            HandleCommon(session, packet);
+        AuthData authData = DatabaseManager.AuthData.GetByAccountId(accountId);
+        if (authData is null)
+        {
+            Logger.Error("AuthData with account ID {accountId} was not found in database.", accountId);
+            session.Send(LoginResultPacket.SendLoginMode(LoginMode.SystemErrorDB));
+            return;
+        }
 
-            Player player = AccountStorage.GetCharacter(authData.CharacterId);
-            player.Session = session;
+        Player dbPlayer = DatabaseManager.Characters.FindPlayerById(authData.OnlineCharacterId, session);
 
-            session.InitPlayer(player);
+        // Backwards seeking because we read accountId here
+        packet.Skip(-8);
+        HandleCommon(session, packet);
 
-            //session.Send(0x27, 0x01); // Meret market related...?
+        session.InitPlayer(dbPlayer);
 
-            session.Send(LoginPacket.LoginRequired(accountId));
+        Player player = session.Player;
 
-            session.Send(BuddyListPacket.StartList());
-            session.Send(BuddyListPacket.EndList());
+        player.BuddyList = GameServer.BuddyManager.GetBuddies(player.CharacterId);
+        player.Mailbox = GameServer.MailManager.GetMails(player.CharacterId);
 
-            // Meret market
-            //session.Send("6E 00 0B 00 00 00 00 00 00 00 00 00 00 00 00".ToByteArray());
-            //session.Send("6E 00 0C 00 00 00 00".ToByteArray());
-            // UserConditionEvent
-            //session.Send("BF 00 00 00 00 00 00".ToByteArray());
-            // PCBangBonus
-            //session.Send("A7 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00".ToByteArray());
-            TimeSyncPacket.SetInitial1();
-            TimeSyncPacket.SetInitial2();
-            TimeSyncPacket.Request();
-            // SendStat 0x2F (How to send here without ObjectId?, Seems fine to send after entering field)
+        GameServer.PlayerManager.AddPlayer(player);
+        GameServer.BuddyManager.SetFriendSessions(player);
 
-            session.SyncTicks();
-            session.Send(DynamicChannelPacket.DynamicChannel());
-            session.Send(ServerEnterPacket.Enter(session));
-            // SendUgc f(0x16), SendCash f(0x09), SendContentShutdown f(0x01, 0x04), SendPvp f(0x0C)
-            PacketWriter pWriter = PacketWriter.Of(SendOp.SYNC_NUMBER);
-            pWriter.WriteByte();
-            session.Send(pWriter);
-            // 0x112, Prestige f(0x00, 0x07)
-            session.Send(PrestigePacket.Prestige(session.Player));
+        // Only send buddy login notification if player is not changing channels
+        if (!player.IsMigrating)
+        {
+            player.UpdateBuddies();
+        }
 
-            // Load inventory tabs
-            foreach (InventoryTab tab in Enum.GetValues(typeof(InventoryTab)))
+        if (player.GuildId != 0)
+        {
+            Guild guild = GameServer.GuildManager.GetGuildById(player.GuildId);
+            player.Guild = guild;
+            GuildMember guildMember = guild.Members.First(x => x.Id == player.CharacterId);
+            guildMember.Player = player;
+            player.GuildMember = guildMember;
+            session.Send(GuildPacket.UpdateGuild(guild));
+            guild.BroadcastPacketGuild(GuildPacket.UpdatePlayer(player));
+            if (!player.IsMigrating)
             {
-                InventoryController.LoadInventoryTab(session, tab);
+                guild.BroadcastPacketGuild(GuildPacket.MemberLoggedIn(player), session);
+            }
+        }
+
+        // Get Clubs
+        foreach (ClubMember member in player.ClubMembers)
+        {
+            Club club = GameServer.ClubManager.GetClubById(member.ClubId);
+
+            if (club is null)
+            {
+                continue;
             }
 
-            List<QuestMetadata> questList = QuestMetadataStorage.GetAvailableQuests(player.Levels.Level); // TODO: This logic needs to be refactored when DB is implemented
-            IEnumerable<List<QuestMetadata>> packetCount = SplitList(questList, 200); // Split the quest list in 200 quests per packet, same way kms do
-
-            foreach (List<QuestMetadata> item in packetCount)
+            club.Members.First(x => x.Player.CharacterId == player.CharacterId).Player = player;
+            club.BroadcastPacketClub(ClubPacket.UpdateClub(club));
+            if (!player.IsMigrating)
             {
-                session.Send(QuestPacket.SendQuests(item));
+                club.BroadcastPacketClub(ClubPacket.LoginNotice(player, club), session);
             }
 
-            // send achievement table
-            session.Send(AchievePacket.WriteTableStart());
-            List<Achieve> achieveList = new List<Achieve>(session.Player.Achieves.Values);
-            IEnumerable<List<Achieve>> achievePackets = SplitList(achieveList, 60); // Split the achieve list to 60 achieves per packet
+            player.Clubs.Add(club);
+            member.Player = player;
+        }
 
-            foreach (List<Achieve> achieve in achievePackets)
+        // Get Group Chats
+        player.GroupChats = GameServer.GroupChatManager.GetGroupChatsByMember(player.CharacterId);
+        foreach (GroupChat groupChat in player.GroupChats)
+        {
+            session.Send(GroupChatPacket.Update(groupChat));
+            if (!player.IsMigrating)
             {
-                session.Send(AchievePacket.WriteTableContent(achieve));
+                groupChat.BroadcastPacketGroupChat(GroupChatPacket.LoginNotice(groupChat, player));
+            }
+        }
+
+        // Get Shop Logs
+        player.ShopInfos = DatabaseManager.PlayerShopInfos.FindAllByCharacterId(player.CharacterId);
+        player.ShopInventories = DatabaseManager.PlayerShopInventories.FindAllByCharacterId(player.CharacterId, player.AccountId);
+
+        //session.Send(0x27, 0x01); // Meret market related...?
+        session.Send(MushkingRoyaleSystemPacket.LoadStats(player.Account.MushkingRoyaleStats));
+        session.Send(MushkingRoyaleSystemPacket.LoadMedals(player.Account));
+
+        player.GetUnreadMailCount();
+        session.Send(BuddyPacket.Initialize());
+        session.Send(BuddyPacket.LoadList(player.BuddyList));
+        session.Send(BuddyPacket.EndList(player.BuddyList.Count));
+
+        // Meret market
+        session.Player.GetMeretMarketPersonalListings();
+        session.Player.GetMeretMarketSales();
+        // UserConditionEvent
+        //session.Send("BF 00 00 00 00 00 00".ToByteArray());
+        // PCBangBonus
+        //session.Send("A7 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00".ToByteArray());
+
+        session.Send(TimeSyncPacket.SetInitial1());
+        session.Send(TimeSyncPacket.SetInitial2());
+
+        session.Send(StatPacket.SetStats(session.Player.FieldPlayer));
+        // session.Send(StatPacket.SetStats(session.Player.FieldPlayer)); // Second packet is meant to send the stats initialized, for now we'll just send the first one
+
+        session.Player.ClientTickSyncLoop();
+        session.Send(DynamicChannelPacket.DynamicChannel(short.Parse(ConstantsMetadataStorage.GetConstant("ChannelCount"))));
+
+        session.Send(ServerEnterPacket.Enter(session));
+        session.Send(UGCPacket.Unknown22());
+        session.Send(CashPacket.Unknown09());
+
+        // SendContentShutdown f(0x01, 0x04)
+        session.Send(PvpPacket.Mode0C());
+        session.Send(SyncNumberPacket.Send());
+        session.Send(SyncValuePacket.SetSyncValue(120000)); // unknown what this value means
+
+        session.Send(PrestigePacket.SetLevels(player));
+        session.Send(PrestigePacket.WeeklyMissions(player.PrestigeMissions));
+
+        // Load inventory tabs
+        foreach (InventoryTab tab in Enum.GetValues(typeof(InventoryTab)))
+        {
+            player.Inventory.LoadInventoryTab(session, tab);
+        }
+
+        if (player.Account.HomeId != 0)
+        {
+            Home home = GameServer.HomeManager.GetHomeById(player.Account.HomeId);
+            player.Account.Home = home;
+            session.Send(WarehouseInventoryPacket.StartList());
+            int counter = 0;
+            foreach (KeyValuePair<long, Item> kvp in home.WarehouseInventory)
+            {
+                session.Send(WarehouseInventoryPacket.Load(kvp.Value, ++counter));
             }
 
-            session.Send(MarketInventoryPacket.Count(0)); // Typically sent after buddylist
-            session.Send(MarketInventoryPacket.StartList());
-            session.Send(MarketInventoryPacket.EndList());
+            session.Send(WarehouseInventoryPacket.EndList());
+
             session.Send(FurnishingInventoryPacket.StartList());
+            foreach (Cube cube in home.FurnishingInventory.Values.Where(x => x.Item != null))
+            {
+                session.Send(FurnishingInventoryPacket.Load(cube));
+            }
+
             session.Send(FurnishingInventoryPacket.EndList());
-            // SendQuest, SendAchieve, SendManufacturer, SendUserMaid
-            session.Send(UserEnvPacket.SetTitles(player));
-            session.Send(UserEnvPacket.Send04());
-            session.Send(UserEnvPacket.Send05());
-            session.Send(UserEnvPacket.Send08());
-            session.Send(UserEnvPacket.Send09());
-            session.Send(UserEnvPacket.Send10());
-            session.Send(UserEnvPacket.Send12());
-
-            // SendMeretMarket f(0xC9)
-            session.Send(FishingPacket.LoadLog());
-            // SendPvp f(0x16,0x17), ResponsePet f(0x07), 0xF6
-            // CharacterAbility
-            // E1 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-
-            // Normally, options are only requested for a new character. Since we don't have a database, we'll always requests the users bindings
-            session.Send(KeyTablePacket.RequestDefault());
-            // TODO - Ask for mouse or kb controls on new character creation.
-            // Commented out since its annoying to click every time
-            //session.Send(KeyTablePacket.AskKeyboardOrMouse());
-
-            // Key bindings and skill slots would normally be loaded from a database
-            // If the character is not a new character, this is what we would send
-            // session.Send(KeyTablePacket.SendFullOptions(session.Player.Options));
-
-            // SendKeyTable f(0x00), SendGuideRecord f(0x03), GameEvent f(0x00)
-            // SendBannerList f(0x19), SendRoomDungeon f(0x05, 0x14, 0x17)
-            // FieldEntrance
-            session.Send("19 00 00 65 00 00 00 29 7C 7D 01 0C 4D A1 6F 01 0C D3 1A 5F 01 0C EF 03 00 00 01 A2 3C 31 01 0C 3F 0C B7 0D 01 6B 55 5F 01 0C 3A 77 31 01 0C B1 98 BA 01 0C 03 90 5F 01 0C F9 7A 40 01 0C 91 B5 40 01 0C F9 57 31 01 0C 2F C7 BB 0D 01 81 97 7D 01 0C C2 70 5F 01 0C 51 96 40 01 0C B9 38 31 01 0C 41 78 7D 01 0C 65 9D 6F 01 0C 83 51 5F 01 0C 52 73 31 01 0C FF E0 B8 0D 01 11 77 40 01 0C A9 B1 40 01 0C 11 54 31 01 0C DA 6C 5F 01 0C 69 92 40 01 0C D1 34 31 01 0C 7D 99 6F 01 0C 03 13 5F 01 0C 69 6F 31 01 0C 32 88 5F 01 0C 9B 4D 5F 01 0C FF 6F B6 0D 01 29 73 40 01 0C C1 AD 40 01 0C 29 50 31 01 0C 81 8E 40 01 0C E9 30 31 01 0C 09 CE 8C 01 0C 95 95 6F 01 0C 1B 0F 5F 01 0C 4A 84 5F 01 0C B3 49 5F 01 0C 82 6B 31 01 0C 4F 15 BC 0D 01 F9 8C BA 01 00 D9 A9 40 01 0C 41 4C 31 01 0C EF B9 B8 0D 01 99 8A 40 01 0C 21 CA 8C 01 0C 01 AD 6F 01 0C 33 0B 5F 01 0C 99 67 31 01 0C 62 80 5F 01 0C CB 45 5F 01 0C 79 08 9C 01 0C F1 A5 40 01 0C E1 87 7D 01 0C BB 9B 5F 01 0C B1 86 40 01 0C 39 C6 8C 01 0C 7A 7C 5F 01 0C B2 63 31 01 0C 29 85 BA 01 0E 91 04 9C 01 0C 09 A2 40 01 0C 71 44 31 01 0C F9 83 7D 01 0C 1D A9 6F 01 0C D3 97 5F 01 0C C9 82 40 01 0C 51 C2 8C 01 0C 61 BD 40 01 0C C9 5F 31 01 0C 51 9F 7D 01 0C 92 78 5F 01 0C 0F 08 B9 0D 01 A9 00 9C 01 0C 89 40 31 01 0C 11 80 7D 01 0C 35 A5 6F 01 0C BB 1E 5F 01 0C 53 59 5F 01 0C E9 03 00 00 01 22 7B 31 01 0C EB 93 5F 01 0C EA 03 00 00 01 E1 7E 40 01 0C 69 BE 8C 01 0C 79 B9 40 01 0C E1 5B 31 01 0C EB 03 00 00 01 69 9B 7D 01 0C AA 74 5F 01 0C EC 03 00 00 01 ED 03 00 00 01 C1 FC 9B 01 0C EE 03 00 00 01".ToByteArray());
-            // 0xF0, ResponsePet P(0F 01)
-            // RequestFieldEnter
-            //session.Send("16 00 00 41 75 19 03 00 01 8A 42 0F 00 00 00 00 00 00 C0 28 C4 00 40 03 44 00 00 16 44 00 00 00 00 00 00 00 00 55 FF 33 42 E8 49 01 00".ToByteArray());
-            session.Send(FieldPacket.RequestEnter(session.FieldPlayer));
-            // SendUgc: 15 01 00 00 00 00 00 00 00 00 00 00 00 4B 00 00 00
-            // SendHomeCommand: 00 E1 0F 26 89 7F 98 3C 26 00 00 00 00 00 00 00 00
-
-            //session.Send("B9 00 00 E1 0F 26 89 7F 98 3C 26 00 00 00 00 00 00 00 00".ToByteArray());
-            //session.Send(ServerEnterPacket.Confirm());
-
-            //session.Send(0xF0, 0x00, 0x1F, 0x78, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x00, 0x00);
-            //session.Send(0x28, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00);
-            //session.Send(ServerEnterPacket.Confirm());
         }
 
-        public override void Handle(LoginSession session, PacketReader packet)
+        session.Send(QuestPacket.StartList());
+        session.Send(QuestPacket.Packet1F());
+        session.Send(QuestPacket.Packet20());
+
+        IEnumerable<List<QuestStatus>> packetCount = player.QuestData.Values.ToList().SplitList(200); // Split the quest list in 200 quests per packet
+        foreach (List<QuestStatus> item in packetCount)
         {
-            session.AccountId = packet.ReadLong();
-
-            // Backwards seeking because we read accountId here
-            packet.Skip(-8);
-            HandleCommon(session, packet);
+            session.Send(QuestPacket.SendQuests(item));
         }
 
-        protected override void HandleCommon(Session session, PacketReader packet)
+        session.Send(QuestPacket.EndList());
+
+        session.Send(TrophyPacket.WriteTableStart());
+        List<Trophy> trophyList = new(player.TrophyData.Values);
+        IEnumerable<List<Trophy>> trophyListPackets = trophyList.SplitList(60);
+
+        foreach (List<Trophy> trophy in trophyListPackets)
         {
-            long accountId = packet.ReadLong();
-            int tokenA = packet.ReadInt();
-            int tokenB = packet.ReadInt();
-
-            Logger.Info($"LOGIN USER: {accountId}");
-            AuthData authData = AuthStorage.GetData(accountId);
-            if (authData == null)
-            {
-                throw new ArgumentException("Attempted connection to game with unauthorized account");
-            }
-            else if (tokenA != authData.TokenA || tokenB != authData.TokenB)
-            {
-                throw new ArgumentException("Attempted login with invalid tokens...");
-            }
-
-            session.Send((byte) SendOp.MOVE_RESULT, 0x00, 0x00);
+            session.Send(TrophyPacket.WriteTableContent(trophy));
         }
 
-        public static IEnumerable<List<T>> SplitList<T>(List<T> locations, int nSize = 30)
+        // SendQuest, SendAchieve, SendManufacturer, SendUserMaid
+        session.Send(UserEnvPacket.SetTitles(player));
+        session.Send(UserEnvPacket.Send04());
+        session.Send(UserEnvPacket.Send05());
+        session.Send(UserEnvPacket.UpdateLifeSkills(player.GatheringCount));
+        session.Send(UserEnvPacket.Send09());
+        session.Send(UserEnvPacket.Send10());
+        session.Send(UserEnvPacket.Send12());
+
+        session.Send(MeretMarketPacket.ModeC9());
+
+        session.Send(FishingPacket.LoadAlbum(player));
+
+        session.Send(PvpPacket.Mode16());
+        session.Send(PvpPacket.Mode17());
+
+        session.Send(PetPacket.LoadAlbum());
+        // LegionBattle (0xF6)
+        // CharacterAbility
+        // E1 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+        // If the character is not a new character, this is what we would send
+        session.Send(KeyTablePacket.SendFullOptions(player.GameOptions));
+
+        if (player.MapId == (int) Map.UnknownLocation) // tutorial map
         {
-            for (int i = 0; i < locations.Count; i += nSize)
-            {
-                yield return locations.GetRange(i, Math.Min(nSize, locations.Count - i));
-            }
+            session.Send(KeyTablePacket.AskKeyboardOrMouse());
         }
+
+        GameEventHelper.LoadEvents(session.Player);
+        List<GameEvent> gameEvents = DatabaseManager.Events.FindAll();
+        IEnumerable<List<GameEvent>> gameEventPackets = gameEvents.SplitList(5);
+        foreach (List<GameEvent> gameEvent in gameEventPackets)
+        {
+            session.Send(GameEventPacket.Load(gameEvent));
+        }
+
+        // SendKeyTable f(0x00), SendGuideRecord f(0x03), GameEvent f(0x00)
+        // SendBannerList f(0x19), SendRoomDungeon f(0x05, 0x14, 0x17)
+        session.Send(DungeonListPacket.DungeonList());
+        // 0xF0, ResponsePet P(0F 01)
+        // RequestFieldEnter
+        //session.Send("16 00 00 41 75 19 03 00 01 8A 42 0F 00 00 00 00 00 00 C0 28 C4 00 40 03 44 00 00 16 44 00 00 00 00 00 00 00 00 55 FF 33 42 E8 49 01 00".ToByteArray());
+        session.Send(FieldEnterPacket.RequestEnter(player.FieldPlayer));
+
+        Party party = GameServer.PartyManager.GetPartyByMember(player.CharacterId);
+        if (party != null)
+        {
+            player.Party = party;
+            if (!player.IsMigrating)
+            {
+                party.BroadcastPacketParty(PartyPacket.LoginNotice(player), session);
+            }
+
+            session.Send(PartyPacket.Create(party, false));
+            party.BroadcastPacketParty(PartyPacket.UpdatePlayer(player));
+            party.BroadcastPacketParty(PartyPacket.UpdateDungeonInfo(player));
+        }
+
+        player.IsMigrating = false;
+
+        // SendUgc: 15 01 00 00 00 00 00 00 00 00 00 00 00 4B 00 00 00
+        session.Send(HomeCommandPacket.LoadHome(player));
+
+        player.OnlineTimeThread = player.OnlineTimer();
+        player.TimeSyncTask = player.TimeSyncLoop();
+
+        session.Send(TimeSyncPacket.SetSessionServerTick(0));
+        //session.Send("B9 00 00 E1 0F 26 89 7F 98 3C 26 00 00 00 00 00 00 00 00".ToByteArray());
+        session.Send(ServerEnterPacket.Confirm());
+
+        //session.Send(0xF0, 0x00, 0x1F, 0x78, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x00, 0x00);
+        //session.Send(0x28, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00);
+    }
+
+    public override void Handle(LoginSession session, PacketReader packet)
+    {
+        session.AccountId = packet.ReadLong();
+
+        // Backwards seeking because we read accountId here
+        packet.Skip(-8);
+        HandleCommon(session, packet);
+    }
+
+    protected override void HandleCommon(Session session, PacketReader packet)
+    {
+        long accountId = packet.ReadLong();
+        int tokenA = packet.ReadInt();
+        int tokenB = packet.ReadInt();
+
+        Logger.Information("LOGIN USER: {accountId}", accountId);
+        AuthData authData = DatabaseManager.AuthData.GetByAccountId(accountId);
+        if (authData == null)
+        {
+            throw new ArgumentException("Attempted connection to game with unauthorized account");
+        }
+
+        if (tokenA != authData.TokenA || tokenB != authData.TokenB)
+        {
+            throw new ArgumentException("Attempted login with invalid tokens...");
+        }
+
+        session.Send(MoveResultPacket.SendStatus(status: 0));
     }
 }

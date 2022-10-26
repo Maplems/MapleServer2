@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using Maple2Storage.Enums;
 using Maple2Storage.Types.Metadata;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
@@ -8,181 +6,194 @@ using MapleServer2.Data.Static;
 using MapleServer2.Enums;
 using MapleServer2.Packets;
 using MapleServer2.Servers.Game;
-using MapleServer2.Tools;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+public class MasteryHandler : GamePacketHandler<MasteryHandler>
 {
-    public class MasteryHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.ConstructRecipe;
+
+    private enum Mode : byte
     {
-        public override RecvOp OpCode => RecvOp.CONSTRUCT_RECIPE;
+        RewardBox = 0x01,
+        CraftItem = 0x02
+    }
 
-        public MasteryHandler(ILogger<MasteryHandler> logger) : base(logger) { }
+    private enum MasteryNotice : byte
+    {
+        NotEnoughMastery = 0x01,
+        NotEnoughMesos = 0x02,
+        RequiredQuestIsNotCompleted = 0x03,
+        NotEnoughItems = 0x04,
+        InsufficientLevel = 0x07
+    }
 
-        private enum MasteryMode : byte
+    public override void Handle(GameSession session, PacketReader packet)
+    {
+        Mode mode = (Mode) packet.ReadByte();
+        switch (mode)
         {
-            RewardBox = 0x01,
-            CraftItem = 0x02
+            case Mode.RewardBox:
+                HandleRewardBox(session, packet);
+                break;
+            case Mode.CraftItem:
+                HandleCraftItem(session, packet);
+                break;
+            default:
+                LogUnknownMode(mode);
+                break;
+        }
+    }
+
+    private static void HandleRewardBox(GameSession session, PacketReader packet)
+    {
+        int rewardBoxDetails = packet.ReadInt();
+        int type = rewardBoxDetails / 1000;
+        int grade = rewardBoxDetails % 100;
+
+        // get the reward box item ID
+        MasteryMetadata mastery = MasteryMetadataStorage.GetMastery(type);
+        if (mastery == null)
+        {
+            Logger.Error("Unknown mastery type {type} from user: {name}", type, session.Player.Name);
+            return;
         }
 
-        public override void Handle(GameSession session, PacketReader packet)
+        int rewardBoxItemId = mastery.Grades[grade - 1].RewardJobItemID;
+        Item rewardBox = new(rewardBoxItemId)
         {
-            MasteryMode mode = (MasteryMode) packet.ReadByte();
-            switch (mode)
-            {
-                case MasteryMode.RewardBox:
-                    HandleRewardBox(session, packet);
-                    break;
-                case MasteryMode.CraftItem:
-                    HandleCraftItem(session, packet);
-                    break;
-                default:
-                    IPacketHandler<GameSession>.LogUnknownMode(mode);
-                    break;
-            }
+            Amount = 1
+        };
+
+        // give player the reward box item
+        session.Player.Inventory.AddItem(session, rewardBox, true);
+
+        // mark reward box as claimed
+        session.Send(MasteryPacket.ClaimReward(rewardBoxDetails, rewardBox));
+    }
+
+    private static void HandleCraftItem(GameSession session, PacketReader packet)
+    {
+        int recipeId = packet.ReadInt();
+
+        // attempt to oad the recipe metadata
+        RecipeMetadata recipe = RecipeMetadataStorage.GetRecipe(recipeId);
+        if (recipe == null)
+        {
+            Logger.Error("Unknown recipe ID {recipeId} from user: {name}", recipeId, session.Player.Name);
+            return;
         }
 
-        private void HandleRewardBox(GameSession session, PacketReader packet)
+        if (recipe.RequireMastery > 0)
         {
-            int rewardBoxDetails = packet.ReadInt();
-            int type = rewardBoxDetails / 1000;
-            int grade = rewardBoxDetails % 100;
-
-            // get the reward box item ID
-            MasteryMetadata mastery = MasteryMetadataStorage.GetMastery(type);
-            if (mastery == null)
+            if (session.Player.Levels.MasteryExp.First(x => x.Type == (MasteryType) recipe.MasteryType).CurrentExp < recipe.RequireMastery)
             {
-                Logger.LogError($"Unknown mastery type {type} from user: {session.Player.Name}");
+                session.Send(MasteryPacket.MasteryNotice((short) MasteryNotice.NotEnoughMastery));
                 return;
-            }
-
-            int rewardBoxItemId = mastery.Grades[grade - 1].RewardJobItemID;
-            Item rewardBox = new Item(rewardBoxItemId) { Amount = 1 };
-
-            // give player the reward box item
-            InventoryController.Add(session, rewardBox, true);
-
-            // mark reward box as claimed
-            session.Send(MasteryPacket.ClaimReward(rewardBoxDetails, 1, (int) rewardBoxItemId));
-        }
-
-        private void HandleCraftItem(GameSession session, PacketReader packet)
-        {
-            int recipeId = packet.ReadInt();
-
-            // attempt to oad the recipe metadata
-            RecipeMetadata recipe = RecipeMetadataStorage.GetRecipe(recipeId);
-            if (recipe == null)
-            {
-                Logger.LogError($"Unknown recipe ID {recipeId} from user: {session.Player.Name}");
-                return;
-            }
-
-            // does the play have enough mesos for this recipe?
-            if (!session.Player.Wallet.Meso.Modify(-recipe.GetMesosRequired()))
-            {
-                // send notice to player saying they haven't got enough mesos
-                session.SendNotice("You don't have enough mesos.");
-                return;
-            }
-
-            // does the player have all the required ingredients for this recipe?
-            if (!PlayerHasAllIngredients(session, recipe))
-            {
-                // send notice to player saying they haven't got enough materials
-                session.SendNotice("You've run out of materials.");
-                return;
-            }
-
-            // only add reward items once all required items & mesos have been removed from player
-            if (RemoveRequiredItemsFromInventory(session, recipe))
-            {
-                AddRewardItemsToInventory(session, recipe);
             }
         }
 
-        private static bool RemoveRequiredItemsFromInventory(GameSession session, RecipeMetadata recipe)
+        if (recipe.RequireQuest.Count > 0)
         {
-            List<Item> playerInventoryItems = new(session.Player.Inventory.Items.Values);
-            List<RecipeItem> ingredients = recipe.GetIngredients();
-
-            for (int i = 0; i < ingredients.Count; i++)
+            foreach (int questId in recipe.RequireQuest)
             {
-                RecipeItem ingredient = ingredients.ElementAt(i);
-                Item item = playerInventoryItems.FirstOrDefault(x => x.Id == ingredient.Id);
-                if (item == null)
+                if (session.Player.QuestData.TryGetValue(questId, out QuestStatus quest) && quest.State is not QuestState.Completed)
                 {
-                    continue;
-                }
-
-                // check if whole stack will be used, and remove the item
-                // otherwise we want to just want to subtract the amount
-                if (ingredient.Amount == item.Amount)
-                {
-                    InventoryController.Remove(session, item.Uid, out Item _);
-                }
-                else
-                {
-                    InventoryController.Update(session, item.Uid, item.Amount - 1);
+                    session.Send(MasteryPacket.MasteryNotice((short) MasteryNotice.RequiredQuestIsNotCompleted));
+                    return;
                 }
             }
-
-            return true;
         }
 
-        private static void AddRewardItemsToInventory(GameSession session, RecipeMetadata recipe)
+        // does the play have enough mesos for this recipe?
+        if (!session.Player.Wallet.Meso.Modify(-recipe.RequireMeso))
         {
-            // award items
-            List<RecipeItem> result = recipe.GetResult();
-            for (int i = 0; i < result.Count; i++)
-            {
-                Item rewardItem = new(result.ElementAt(i).Id)
-                {
-                    Rarity = result.ElementAt(i).Rarity,
-                    Amount = result.ElementAt(i).Amount
-                };
-                InventoryController.Add(session, rewardItem, true);
-            }
-
-            // add mastery exp
-            session.Player.Levels.GainMasteryExp(Enum.Parse<MasteryType>(recipe.MasteryType, true),
-                recipe.RewardMastery);
-
-            // add player exp
-            if (recipe.HasExpReward())
-            {
-                // TODO: add metadata for common exp tables to be able to look up exp amount for masteries etc.
-            }
+            session.Send(MasteryPacket.MasteryNotice((short) MasteryNotice.NotEnoughMesos));
+            return;
         }
 
-        private static bool PlayerHasEnoughMesos(GameSession session, RecipeMetadata recipe)
+        // does the player have all the required ingredients for this recipe?
+        if (!PlayerHasAllIngredients(session, recipe))
         {
-            long mesoBalance = session.Player.Wallet.Meso.Amount;
-            if (mesoBalance == 0)
+            session.Send(MasteryPacket.MasteryNotice((short) MasteryNotice.NotEnoughItems));
+            return;
+        }
+
+        // only add reward items once all required items & mesos have been removed from player
+        if (RemoveRequiredItemsFromInventory(session, recipe))
+        {
+            AddRewardItemsToInventory(session, recipe);
+        }
+    }
+
+    private static bool RemoveRequiredItemsFromInventory(GameSession session, RecipeMetadata recipe)
+    {
+        List<RecipeItem> ingredients = recipe.RequiredItems;
+
+        foreach (RecipeItem ingredient in ingredients)
+        {
+            Item item = session.Player.Inventory.GetAllById(ingredient.ItemId)
+                .FirstOrDefault(x => x.Rarity == ingredient.Rarity);
+
+            if (item == null || item.Amount < ingredient.Amount)
             {
                 return false;
             }
 
-            return mesoBalance >= recipe.GetMesosRequired();
+            session.Player.Inventory.ConsumeItem(session, item.Uid, ingredient.Amount);
         }
 
-        private static bool PlayerHasAllIngredients(GameSession session, RecipeMetadata recipe)
+        return true;
+    }
+
+    private static void AddRewardItemsToInventory(GameSession session, RecipeMetadata recipe)
+    {
+        // award items
+        List<RecipeItem> resultItems = recipe.RewardItems;
+        foreach (RecipeItem resultItem in resultItems)
         {
-            List<Item> playerInventoryItems = new(session.Player.Inventory.Items.Values);
-            List<RecipeItem> ingredients = recipe.GetIngredients();
+            Item rewardItem = new(resultItem.ItemId, resultItem.Amount, resultItem.Rarity);
+            session.Player.Inventory.AddItem(session, rewardItem, true);
+            session.Send(MasteryPacket.GetCraftedItem((MasteryType) recipe.MasteryType, rewardItem));
+        }
 
-            for (int i = 0; i < ingredients.Count; i++)
-            {
-                RecipeItem ingredient = ingredients.ElementAt(i);
-                Item item = playerInventoryItems.FirstOrDefault(x => x.Id == ingredient.Id);
-                if (item != null)
-                {
-                    return item.Amount >= ingredient.Amount;
-                }
-            }
+        // add mastery exp
+        session.Player.Levels.GainMasteryExp((MasteryType) recipe.MasteryType, recipe.RewardMastery);
 
+        // add player exp
+        if (recipe.ExceptRewardExp)
+        {
+            // TODO: add metadata for common exp tables to be able to look up exp amount for masteries etc.
+        }
+    }
+
+    private static bool PlayerHasEnoughMesos(GameSession session, RecipeMetadata recipe)
+    {
+        long mesoBalance = session.Player.Wallet.Meso.Amount;
+        if (mesoBalance == 0)
+        {
             return false;
         }
+
+        return mesoBalance >= recipe.RequireMeso;
+    }
+
+    private static bool PlayerHasAllIngredients(GameSession session, RecipeMetadata recipe)
+    {
+        List<RecipeItem> ingredients = recipe.RequiredItems;
+
+        foreach (RecipeItem ingredient in ingredients)
+        {
+            Item item = session.Player.Inventory.GetAllById(ingredient.ItemId)
+                .FirstOrDefault(x => x.Rarity == ingredient.Rarity);
+
+            if (item == null || item.Amount < ingredient.Amount)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

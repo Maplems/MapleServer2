@@ -1,100 +1,120 @@
-﻿using System;
-using Maple2Storage.Types;
+﻿using Maple2Storage.Types;
 using MaplePacketLib2.Tools;
 using MapleServer2.Constants;
+using MapleServer2.Data.Static;
 using MapleServer2.Packets;
 using MapleServer2.Packets.Helpers;
 using MapleServer2.Servers.Game;
 using MapleServer2.Types;
-using Microsoft.Extensions.Logging;
 
-namespace MapleServer2.PacketHandlers.Game
+namespace MapleServer2.PacketHandlers.Game;
+
+// ClientTicks/Time here are probably used for animation
+// Currently I am just updating animation instantly.
+public class UserSyncHandler : GamePacketHandler<UserSyncHandler>
 {
-    // ClientTicks/Time here are probably used for animation
-    // Currently I am just updating animation instantly.
-    public class UserSyncHandler : GamePacketHandler
+    public override RecvOp OpCode => RecvOp.UserSync;
+
+    public override void Handle(GameSession session, PacketReader packet)
     {
-        public override RecvOp OpCode => RecvOp.USER_SYNC;
+        byte function = packet.ReadByte(); // Unknown what this is for
+        session.ServerTick = packet.ReadInt();
+        session.ClientTick = packet.ReadInt();
 
-        public UserSyncHandler(ILogger<UserSyncHandler> logger) : base(logger) { }
-
-        public override void Handle(GameSession session, PacketReader packet)
+        byte segments = packet.ReadByte();
+        if (segments < 1)
         {
+            return;
+        }
 
-            byte function = packet.ReadByte(); // Unknown what this is for
-            session.ClientTick = packet.ReadInt(); //ClientTicks
+        SyncState[] syncStates = new SyncState[segments];
+        for (int i = 0; i < segments; i++)
+        {
+            syncStates[i] = packet.ReadSyncState();
+
+            packet.ReadInt(); // ClientTicks
             packet.ReadInt(); // ServerTicks
-
-            byte segments = packet.ReadByte();
-            if (segments < 1)
-            {
-                return;
-            }
-
-            SyncState[] syncStates = new SyncState[segments];
-            for (int i = 0; i < segments; i++)
-            {
-                syncStates[i] = packet.ReadSyncState();
-
-                packet.ReadInt(); // ClientTicks
-                packet.ReadInt(); // ServerTicks
-            }
-
-            Packet syncPacket = SyncStatePacket.UserSync(session.FieldPlayer, syncStates);
-            session.FieldManager.BroadcastPacket(syncPacket, session);
-            if (IsCoordSafe(session, syncStates[0].Coord.ToFloat()))
-            {
-                session.Player.SafeCoord = session.FieldPlayer.Coord.ClosestBlock();
-            }
-
-            session.FieldPlayer.Coord = syncStates[0].Coord.ToFloat();
-            if (IsOutOfBounds(session.FieldPlayer.Coord, session.FieldManager.BoundingBox))
-            {
-                session.Player.SafeCoord.Z += 10; // Without this player will spawn inside the block
-                // for some reason if coord is negative player is teleported one block over, which can result player being stuck inside a block
-                if (session.FieldPlayer.Coord.Y < 0)
-                {
-                    session.Player.SafeCoord.Y -= 150;
-                }
-                if (session.FieldPlayer.Coord.X < 0)
-                {
-                    session.Player.SafeCoord.X -= 150;
-                }
-                session.Send(UserMoveByPortalPacket.Move(session, session.Player.SafeCoord));
-                session.Send(FallDamagePacket.FallDamage(session, 150)); // TODO: create a formula to determine HP loss
-            }
-            // not sure if this needs to be synced here
-            session.Player.Animation = syncStates[0].Animation1;
         }
 
-        private static bool IsOutOfBounds(CoordF coord, CoordS[] boundingBox)
+        PacketWriter syncPacket = SyncStatePacket.UserSync(session.Player.FieldPlayer, syncStates);
+        session.FieldManager.BroadcastPacket(syncPacket, session);
+        UpdatePlayer(session, syncStates);
+    }
+
+    public static void UpdatePlayer(GameSession session, SyncState[] syncStates)
+    {
+        Player player = session.Player;
+        IFieldActor<Player> fieldPlayer = player.FieldPlayer;
+
+        CoordF coord = syncStates[0].Coord.ToFloat();
+
+        CoordF coordUnderneath = coord;
+        coordUnderneath.Z -= 50;
+
+        CoordF blockUnderneath = Block.ClosestBlock(coordUnderneath);
+        if (IsCoordSafe(player, syncStates[0].Coord, blockUnderneath))
         {
-            short higherBoundZ = Math.Max(boundingBox[0].Z, boundingBox[1].Z);
-            short lowerBoundZ = Math.Min(boundingBox[1].Z, boundingBox[0].Z);
-            short higherBoundY = Math.Max(boundingBox[0].Y, boundingBox[1].Y);
-            short lowerBoundY = Math.Min(boundingBox[1].Y, boundingBox[0].Y);
-            short higherBoundX = Math.Max(boundingBox[0].X, boundingBox[1].X);
-            short lowerBoundX = Math.Min(boundingBox[1].X, boundingBox[0].X);
-
-            if (coord.Z > higherBoundZ || coord.Z < lowerBoundZ)
+            CoordF safeBlock = Block.ClosestBlock(coord);
+            // TODO: Knowing the state of the player using the animation is probably not the correct way to do this
+            // we will need to know the state of the player for other things like counting time spent on ropes/running/walking/swimming
+            if (syncStates[0].Animation2 is 7 or 132) // swimming
             {
-                return true;
-            }
-            else if (coord.Y > higherBoundY || coord.Y < lowerBoundY)
-            {
-                return true;
-            }
-            else if (coord.X > higherBoundX || coord.X < lowerBoundX)
-            {
-                return true;
+                safeBlock.Z += Block.BLOCK_SIZE; // Without this player will spawn under the water
             }
 
-            return false;
+            safeBlock.Z += 10; // Without this player will spawn inside the block
+
+            player.SafeBlock = safeBlock;
         }
 
-        private static bool IsCoordSafe(GameSession session, CoordF coord)
+        fieldPlayer.Coord = coord;
+        fieldPlayer.Rotation = new()
         {
-            return (session.Player.SafeCoord - coord).Length() > 200 && session.FieldPlayer.Coord.Z == coord.Z && !session.Player.OnAirMount; // Save last coord if player is not falling and not in a air mount
+            Z = syncStates[0].Rotation / 10
+        };
+
+        if (IsOutOfBounds(fieldPlayer.Coord, session.FieldManager.BoundingBox))
+        {
+            player.Move(player.SafeBlock, fieldPlayer.Rotation);
+            player.FallDamage();
         }
+
+        // not sure if this needs to be synced here
+        fieldPlayer.Animation = syncStates[0].BoreAnimation;
+    }
+
+    private static bool IsOutOfBounds(CoordF coord, CoordS[] boundingBox)
+    {
+        CoordS box1 = boundingBox[0];
+        CoordS box2 = boundingBox[1];
+
+        short higherBoundZ = Math.Max(box1.Z, box2.Z);
+        short lowerBoundZ = Math.Min(box2.Z, box1.Z);
+
+        short higherBoundY = Math.Max(box1.Y, box2.Y);
+        short lowerBoundY = Math.Min(box2.Y, box1.Y);
+
+        short higherBoundX = Math.Max(box1.X, box2.X);
+        short lowerBoundX = Math.Min(box2.X, box1.X);
+
+        if (coord.Z > higherBoundZ || coord.Z < lowerBoundZ)
+        {
+            return true;
+        }
+
+        if (coord.Y > higherBoundY || coord.Y < lowerBoundY)
+        {
+            return true;
+        }
+
+        return coord.X > higherBoundX || coord.X < lowerBoundX;
+    }
+
+    private static bool IsCoordSafe(Player player, CoordS currentCoord, CoordF closestCoord)
+    {
+        // Check if current coord is safe to be used as a return point when the character falls off the map
+        return MapMetadataStorage.BlockExists(player.MapId, closestCoord.ToShort())
+               && !player.OnAirMount && (player.SafeBlock - closestCoord).Length() > 350 &&
+               player.FieldPlayer.Coord.Z == currentCoord.Z;
     }
 }
