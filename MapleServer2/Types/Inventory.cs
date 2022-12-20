@@ -22,7 +22,7 @@ public sealed class Inventory : IInventory
     private readonly Dictionary<long, Item> Items;
     public Dictionary<ItemSlot, Item> Equips { get; }
     public Dictionary<ItemSlot, Item> Cosmetics { get; }
-    public Item[] Badges { get; }
+    public Item?[] Badges { get; }
     public Item[] LapenshardStorage { get; }
     public List<SetBonus> SetBonuses { get; }
 
@@ -189,7 +189,7 @@ public sealed class Inventory : IInventory
 
                 if (id != 0)
                 {
-                    session.Player.FieldPlayer?.AdditionalEffects.AddEffect(new(id, level));
+                    session.Player.FieldPlayer?.TaskScheduler.QueueBufferedTask(() => session.Player.FieldPlayer?.AdditionalEffects.AddEffect(new(id, level)));
                 }
             }
 

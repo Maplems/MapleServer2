@@ -1,5 +1,4 @@
-﻿using Maple2Storage.Enums;
-using Maple2Storage.Types;
+﻿using Maple2Storage.Types;
 using MapleServer2.Managers;
 using MapleServer2.Servers.Game;
 
@@ -19,6 +18,7 @@ public interface IFieldActor : IFieldObject
     public bool OnCooldown { get; set; }
     public AdditionalEffects AdditionalEffects { get; }
     public SkillTriggerHandler SkillTriggerHandler { get; }
+    public TickingTaskScheduler TaskScheduler { get; }
 
     public FieldManager? FieldManager { get; }
     public FieldNavigator Navigator { get; }
